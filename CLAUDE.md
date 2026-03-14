@@ -50,22 +50,28 @@ GitHub Actions workflow at `.github/workflows/ci.yml` runs on every push to `mai
 | Job | Trigger | What it does |
 |---|---|---|
 | `test` | all | `python -m unittest discover -s tests -v` on Python 3.10 and 3.14 |
-| `build` | all | `python -m build` + `twine check dist/*`; uploads `dist/` artifact |
-| `publish` | `v*` tags only | Downloads artifact, publishes to PyPI via OIDC trusted publishing |
+| `build` | all | `python -m build` + `twine check dist/*`; uploads `dist/` artifact; detects version tag |
+| `publish` | tagged commits only | Downloads artifact, publishes to PyPI via OIDC trusted publishing |
 
 `test` and `build` run in parallel. `publish` requires both to succeed.
 
 Concurrency: in-progress runs on the same branch/PR are cancelled; tag-triggered runs are never cancelled.
+
+#### Mirror quirk: tag detection
+
+The Codeberg→GitHub mirror fires only a **branch push** event when syncing a new tag — it does not trigger a separate tag-push workflow run. Because of this, `publish` cannot gate on `github.ref == refs/tags/v*`.
+
+Instead, the `build` job uses `fetch-tags: true` and runs `git tag --points-at HEAD` to detect whether the current commit carries a `v*` tag. The result is exposed as the `version-tag` job output, and `publish` gates on `needs.build.outputs.version-tag != ''`. This works regardless of which event triggered the workflow.
 
 ### Release Process
 
 1. Update `version` in `pyproject.toml` and commit.
 2. Tag and push:
    ```bash
-   git tag v1.0.0
-   git push origin v1.0.0
+   git tag v1.0.1
+   git push origin v1.0.1
    ```
-3. The Codeberg→GitHub mirror syncs the tag → workflow triggers → package published to PyPI.
+3. The Codeberg→GitHub mirror syncs both the commit and the tag. The branch-push event triggers the workflow; `build` detects the tag on HEAD and `publish` runs automatically.
 
 ## PyPI Publishing
 
