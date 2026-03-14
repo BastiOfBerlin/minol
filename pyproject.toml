@@ -24,6 +24,11 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 
+[project.urls]
+Homepage = "https://codeberg.org/BastiOfBerlin/minol"
+Repository = "https://codeberg.org/BastiOfBerlin/minol"
+Issues = "https://codeberg.org/BastiOfBerlin/minol/issues"
+
 [project.scripts]
 minol = "minol.cli:main"
 

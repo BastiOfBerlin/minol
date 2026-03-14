@@ -59,15 +59,17 @@ Install from PyPI:
 pip install minol
 ```
 
-Or install from source (clone the repo first):
+Or install from source:
 
 ```bash
+git clone https://codeberg.org/BastiOfBerlin/minol
+cd minol
 pip install .
 ```
 
 `python -m minol` also works without installation — just clone the repo and run from the project root.
 
-> **Note for bind-mounted filesystems** (e.g. the container setup in CONTAINER.md): the `/workspace` mount does not support atomic file rename, which causes `pip install` to fail with `EPERM`. Install from a `/tmp` copy instead:
+> **Note for bind-mounted filesystems** (e.g. container setup: some mounts do not support atomic file rename, which causes `pip install` to fail with `EPERM`. Install from a `/tmp` copy instead:
 > ```bash
 > cp -r /workspace/minol /workspace/pyproject.toml /workspace/README.md /workspace/LICENSE /tmp/minol-build/
 > pip install /tmp/minol-build
