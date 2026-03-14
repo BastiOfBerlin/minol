@@ -41,6 +41,32 @@ __init__.py    ← imports lib, cli, _constants
 - **Relative URL resolution** — SAP may return relative paths in form actions and `Location` headers; resolve against `PORTAL_BASE` before use.
 - **Clean Architecture/Clean Code** — Follow design principles to keep a maintainable code base.
 
+## CI/CD
+
+GitHub Actions workflow at `.github/workflows/ci.yml` runs on every push to `main`, every PR, and every `v*` tag.
+
+### Jobs
+
+| Job | Trigger | What it does |
+|---|---|---|
+| `test` | all | `python -m unittest discover -s tests -v` on Python 3.10 and 3.14 |
+| `build` | all | `python -m build` + `twine check dist/*`; uploads `dist/` artifact |
+| `publish` | `v*` tags only | Downloads artifact, publishes to PyPI via OIDC trusted publishing |
+
+`test` and `build` run in parallel. `publish` requires both to succeed.
+
+Concurrency: in-progress runs on the same branch/PR are cancelled; tag-triggered runs are never cancelled.
+
+### Release Process
+
+1. Update `version` in `pyproject.toml` and commit.
+2. Tag and push:
+   ```bash
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+3. The Codeberg→GitHub mirror syncs the tag → workflow triggers → package published to PyPI.
+
 ## PyPI Publishing
 
 The package is configured for PyPI publishing:
@@ -51,7 +77,7 @@ The package is configured for PyPI publishing:
 - **Build**: `python -m build` from a `/tmp` copy (see pip install limitation in README.md)
 - **Validate**: `twine check dist/*` before uploading
 
-To build and validate:
+To build and validate locally:
 ```bash
 mkdir -p /tmp/minol-build
 cp -r /workspace/minol /workspace/pyproject.toml /workspace/README.md /workspace/LICENSE /tmp/minol-build/
