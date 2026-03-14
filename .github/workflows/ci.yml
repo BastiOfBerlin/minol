@@ -31,8 +31,21 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    outputs:
+      version-tag: ${{ steps.vtag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+      - name: Detect version tag
+        id: vtag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            TAG=$(git tag --points-at HEAD | grep -E '^v' | head -1)
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+          fi
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -53,7 +66,7 @@ jobs:
     name: Publish to PyPI
     needs: [test, build]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: needs.build.outputs.version-tag != ''
     environment: pypi
     permissions:
       id-token: write
