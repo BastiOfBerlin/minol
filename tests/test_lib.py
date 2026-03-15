@@ -4,6 +4,7 @@ import json
 import sys
 import unittest
 from io import StringIO
+from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 from minol._constants import CONSUMPTION_TYPES, DATA_ENDPOINT
@@ -54,9 +55,16 @@ class TestMinolScraperLogin(unittest.TestCase):
             s.login()
         mock_auth.assert_called_once_with(
             s.session, "a@b.com", "secret", "000000000001",
-            status_fn=s._status, use_cache=True,
+            status_fn=s._status, use_cache=True, session_path=None,
         )
         self.assertTrue(s.authenticated)
+
+    def test_login_forwards_session_path(self):
+        s = MinolScraper("a@b.com", "secret", "000000000001")
+        with patch("minol.auth.authenticate") as mock_auth:
+            s.login(session_path=Path("/tmp/custom.json"))
+        _, kwargs = mock_auth.call_args
+        self.assertEqual(kwargs["session_path"], Path("/tmp/custom.json"))
 
     def test_login_passes_use_cache_false(self):
         s = MinolScraper("a@b.com", "secret", "000000000001")

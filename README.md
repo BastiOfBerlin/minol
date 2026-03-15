@@ -173,10 +173,14 @@ heating_raw = scraper.fetch_heating(raw=True)
 
 # Force fresh login (skip session cache)
 scraper.login(use_cache=False)
+
+# Use a custom session cache path
+from pathlib import Path
+scraper.login(session_path=Path("/tmp/my_session.json"))
 ```
 
 ---
 
 ## Session Caching
 
-After a successful login the scraper saves session cookies and the token expiry timestamp to `~/.minol_session.json`. On the next run, expired tokens are rejected immediately without a network request; still-valid tokens are restored from the cache, skipping the full SAML login. Pass `--no-cache` to force a fresh login.
+After a successful login the scraper saves session cookies and the token expiry timestamp to `~/.minol_session.json`. On the next run, expired tokens are rejected immediately without a network request; still-valid tokens are restored from the cache, skipping the full SAML login. Pass `--no-cache` to force a fresh login, or `--session-path /path/to/session.json` to use a custom cache file location.

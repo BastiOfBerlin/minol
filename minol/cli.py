@@ -78,6 +78,8 @@ def main():
                         help="Unit of measurement (kwh or m3). Heating defaults to kwh, water types default to m3.")
     parser.add_argument("--raw", action="store_true", help="Return raw API response instead of parsed data")
     parser.add_argument("--no-cache", action="store_true", help="Skip session cache, force fresh login")
+    parser.add_argument("--session-path", default=None,
+                        help="Path to session cache file (default: ~/.minol_session.json)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
     args = parser.parse_args()
 
@@ -101,7 +103,8 @@ def main():
     scraper = MinolScraper(email, password, user_num)
 
     try:
-        scraper.login(use_cache=not args.no_cache)
+        session_path = Path(args.session_path) if args.session_path else None
+        scraper.login(use_cache=not args.no_cache, session_path=session_path)
 
         kwargs = {"raw": args.raw, "unit": args.unit}
         if args.start:

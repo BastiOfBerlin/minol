@@ -209,7 +209,18 @@ class TestMain(unittest.TestCase):
                 "--email", "u@x.com", "--password", "pass",
                 "--user-num", "000000000001", "--no-cache"
             ])
-        scraper.login.assert_called_once_with(use_cache=False)
+        _, kwargs = scraper.login.call_args
+        self.assertFalse(kwargs.get("use_cache"))
+
+    def test_session_path_forwarded_to_login(self):
+        scraper = self._mock_scraper_cls()
+        with patch("minol.cli.MinolScraper", return_value=scraper):
+            self._run_main([
+                "--email", "u@x.com", "--password", "pass",
+                "--user-num", "000000000001", "--session-path", "/tmp/custom.json"
+            ])
+        _, kwargs = scraper.login.call_args
+        self.assertEqual(kwargs.get("session_path"), Path("/tmp/custom.json"))
 
     def test_password_stdin_reads_from_stdin(self):
         scraper = self._mock_scraper_cls()

@@ -5,6 +5,7 @@ import sys
 import json
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from minol._constants import PORTAL_BASE, DATA_ENDPOINT, CONSUMPTION_TYPES
 from minol._http import HttpSession
@@ -32,17 +33,19 @@ class MinolScraper:
         self._status = status_fn or (lambda msg: print(msg, file=sys.stderr))
 
     # ── Full login flow ────────────────────────────────────────────────────
-    def login(self, use_cache: bool = True):
+    def login(self, use_cache: bool = True, session_path: Path = None):
         """
         Authenticate to the Minol portal.
 
         Delegates to auth.authenticate(), which handles session caching
         transparently (restore on hit, save after fresh login).
         Pass use_cache=False to force a fresh SAML login.
+        Pass session_path to override the default cache file location.
         """
         auth.authenticate(
             self.session, self.email, self.password, self.user_num,
             status_fn=self._status, use_cache=use_cache,
+            session_path=session_path,
         )
         self.authenticated = True
         self.password = ""  # clear plaintext password from memory
