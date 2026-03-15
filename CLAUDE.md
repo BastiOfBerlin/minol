@@ -61,7 +61,9 @@ Concurrency: in-progress runs on the same branch/PR are cancelled; tag-triggered
 
 The Codeberg→GitHub mirror fires only a **branch push** event when syncing a new tag — it does not trigger a separate tag-push workflow run. Because of this, `publish` cannot gate on `github.ref == refs/tags/v*`.
 
-Instead, the `build` job uses `fetch-tags: true` and runs `git tag --points-at HEAD` to detect whether the current commit carries a `v*` tag. The result is exposed as the `version-tag` job output, and `publish` gates on `needs.build.outputs.version-tag != ''`. This works regardless of which event triggered the workflow.
+Instead, the `build` job runs a conditional `git fetch --tags` step (only when `github.ref` is not already a tag ref) and then `git tag --points-at HEAD` to detect whether the current commit carries a `v*` tag. The result is exposed as the `version-tag` job output, and `publish` gates on `needs.build.outputs.version-tag != ''`. This works regardless of which event triggered the workflow.
+
+Note: `fetch-tags: true` on the checkout step is intentionally avoided — it causes a refspec conflict when the workflow is triggered directly by a tag push.
 
 ### Release Process
 

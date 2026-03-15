@@ -35,8 +35,9 @@ jobs:
       version-tag: ${{ steps.vtag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-tags: true
+      - name: Fetch tags (for mirror-push detection)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: git fetch --tags --no-recurse-submodules origin
       - name: Detect version tag
         id: vtag
         run: |
