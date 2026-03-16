@@ -31,9 +31,13 @@ __init__.py    ← imports lib, cli, _constants
 
 ## Design Decisions & Constraints
 
-- **No third-party dependencies** — stdlib only (`urllib`, `http.cookiejar`, `json`, `re`, `html`, `base64`).
+- **No third-party dependencies** — stdlib only (`urllib`, `http.cookiejar`, `json`, `re`, `html`, `base64`, `asyncio`).
+- **Async public API** — all I/O methods (`HttpSession.get/post`, `auth.authenticate`, all `MinolScraper` methods) are `async def`. Use `await` or `asyncio.run()`. `cli.main()` remains sync and calls `asyncio.run(_async_main(...))` internally, so CLI usage is unchanged.
+- **`asyncio.to_thread()` for urllib I/O** — `HttpSession._sync_request()` is the unchanged urllib implementation; `_request()` wraps it via `asyncio.to_thread()`. Requires Python 3.9+ (project requires 3.10+).
+- **`fetch_all()` parallelism** — uses `asyncio.gather()` to fetch all three consumption types concurrently.
 - **Auth as standalone functions** — `auth.py` has module-level `_stepN_` functions; `MinolScraper` delegates fully to `auth.authenticate()`.
-- **`status_fn` callback** — auth functions accept an optional callback for progress messages, avoiding coupling to `MinolScraper._status()`.
+- **`status_fn` stays sync** — it's a simple `print()` callback; no benefit from async.
+- **File I/O in cache functions stays sync** — tiny JSON files, negligible latency; no benefit from async.
 - **Logging** — each module uses `logging.getLogger(__name__)`; `logging.basicConfig()` is only called in `cli.main()`, not at import time.
 - **Dynamic B2C policy detection** — policy name extracted from the SAP redirect URL, not hardcoded.
 - **Regex form parsing** — SAML auto-submit pages are machine-generated; regex is reliable. `parse_forms()` handles both attribute orderings (`name=... value=...` and `value=... name=...`).
@@ -121,7 +125,8 @@ python -m unittest tests/test_utils.py -v
 
 ## Things to Keep in Mind
 
-- Determine whether CLAUDE.md, README.md and/or DEVELOPMENT.md should be updated after changes to relevant other files.
+- Determine whether `CLAUDE.md`, `README.md` and/or `DEVELOPMENT.md` should be updated after changes to relevant other files.
+- Keep the `CHANGELOG.md` up-to-date.
 
 ## Potential Improvements
 

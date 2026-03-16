@@ -152,31 +152,40 @@ Pass `--raw` to get the unprocessed API response instead.
 
 ## Programmatic Usage
 
+The library API is fully async. Use `await` inside an async context, or
+`asyncio.run()` for a quick script:
+
 ```python
+import asyncio
 from minol import MinolScraper
 
-scraper = MinolScraper("user@example.com", "password", "000000000000")
-scraper.login()
+async def main():
+    scraper = MinolScraper("user@example.com", "password", "000000000000")
+    await scraper.login()
 
-# Parsed structured data (default)
-heating = scraper.fetch_heating(timeline_start="202501", timeline_end="202603")
-warm = scraper.fetch_warm_water()
-cold = scraper.fetch_cold_water()
-all_data = scraper.fetch_all()
+    # Parsed structured data (default) — all three types fetched in parallel
+    all_data = await scraper.fetch_all()
 
-# Override unit of measurement (warm water defaults to M3)
-warm_kwh = scraper.fetch_warm_water(unit="kwh")
+    # Individual types
+    heating = await scraper.fetch_heating(timeline_start="202501", timeline_end="202603")
+    warm = await scraper.fetch_warm_water()
+    cold = await scraper.fetch_cold_water()
 
-# Raw API response
-all_raw = scraper.fetch_all_raw()
-heating_raw = scraper.fetch_heating(raw=True)
+    # Override unit of measurement (warm water defaults to M3)
+    warm_kwh = await scraper.fetch_warm_water(unit="kwh")
 
-# Force fresh login (skip session cache)
-scraper.login(use_cache=False)
+    # Raw API response
+    all_raw = await scraper.fetch_all_raw()
+    heating_raw = await scraper.fetch_heating(raw=True)
 
-# Use a custom session cache path
-from pathlib import Path
-scraper.login(session_path=Path("/tmp/my_session.json"))
+    # Force fresh login (skip session cache)
+    await scraper.login(use_cache=False)
+
+    # Use a custom session cache path
+    from pathlib import Path
+    await scraper.login(session_path=Path("/tmp/my_session.json"))
+
+asyncio.run(main())
 ```
 
 ### In-memory session caching (no file I/O)
@@ -185,21 +194,25 @@ API users (e.g. Home Assistant integrations) can manage the session cache themse
 without touching the filesystem. Pass `session_data` to `login()`:
 
 ```python
+import asyncio
 from minol import MinolScraper
 
-scraper = MinolScraper("user@example.com", "password", "000000000000")
+async def main():
+    scraper = MinolScraper("user@example.com", "password", "000000000000")
 
-# First call: pass an empty dict (or None-equivalent) to signal in-memory mode.
-# A fresh SAML login is performed and the new cache dict is returned.
-session_cache = scraper.login(session_data={})
-# Persist session_cache however you like (database, HA storage, etc.)
+    # First call: pass an empty dict to signal in-memory mode.
+    # A fresh SAML login is performed and the new cache dict is returned.
+    session_cache = await scraper.login(session_data={})
+    # Persist session_cache however you like (database, HA storage, etc.)
 
-# Subsequent calls: pass the stored cache dict back.
-# If the token is still valid it is restored without any network requests.
-# If it has expired a fresh login runs and a new cache dict is returned.
-session_cache = scraper.login(session_data=session_cache)
+    # Subsequent calls: pass the stored cache dict back.
+    # If the token is still valid it is restored without any network requests.
+    # If it has expired a fresh login runs and a new cache dict is returned.
+    session_cache = await scraper.login(session_data=session_cache)
 
-data = scraper.fetch_all()
+    data = await scraper.fetch_all()
+
+asyncio.run(main())
 ```
 
 When `session_data` is provided:

@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a new dict is returned. No files are read or written. Intended for
   integrations that manage their own storage (e.g. Home Assistant).
 
+### Changed
+
+- **Async public API** — all I/O methods on `MinolScraper` (`login`,
+  `fetch_consumption`, `fetch_heating`, `fetch_warm_water`, `fetch_cold_water`,
+  `fetch_all`, `fetch_all_raw`) and `auth.authenticate()` are now `async def`.
+  Use `await scraper.login()` / `await scraper.fetch_all()`, or call from
+  `asyncio.run(...)`.  The CLI (`python -m minol`) is unaffected.
+- **`fetch_all()` fetches in parallel** — the three consumption types are now
+  fetched concurrently via `asyncio.gather()`.
+- **`HttpSession.get()` / `.post()` are async** — the underlying urllib I/O
+  runs in a thread pool via `asyncio.to_thread()`, preserving the
+  zero-dependency constraint.
+
 ### Fixed
 
 - **`MinolScraper` default `status_fn` is silent** — constructing

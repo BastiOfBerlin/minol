@@ -1,5 +1,6 @@
 """HTTP session helper using only stdlib (urllib)."""
 
+import asyncio
 import json
 import logging
 from http.cookiejar import CookieJar
@@ -72,8 +73,8 @@ class HttpSession:
             e.filename,
         )
 
-    def _request(self, url: str, data: bytes = None, headers: dict = None,
-                 allow_redirects: bool = True) -> HttpResponse:
+    def _sync_request(self, url: str, data: bytes = None, headers: dict = None,
+                      allow_redirects: bool = True) -> HttpResponse:
         hdrs = {**self.default_headers, **(headers or {})}
         req = Request(url, data=data, headers=hdrs)
         opener = self._no_redirect_opener if not allow_redirects else self._opener
@@ -82,11 +83,15 @@ class HttpSession:
         except HTTPError as e:
             return self._make_error_response(e)
 
-    def get(self, url: str, headers: dict = None, allow_redirects: bool = True) -> HttpResponse:
-        return self._request(url, headers=headers, allow_redirects=allow_redirects)
+    async def _request(self, url: str, data: bytes = None, headers: dict = None,
+                       allow_redirects: bool = True) -> HttpResponse:
+        return await asyncio.to_thread(self._sync_request, url, data, headers, allow_redirects)
 
-    def post(self, url: str, data: str = None, json_data: dict = None,
-             headers: dict = None, allow_redirects: bool = True) -> HttpResponse:
+    async def get(self, url: str, headers: dict = None, allow_redirects: bool = True) -> HttpResponse:
+        return await self._request(url, headers=headers, allow_redirects=allow_redirects)
+
+    async def post(self, url: str, data: str = None, json_data: dict = None,
+                   headers: dict = None, allow_redirects: bool = True) -> HttpResponse:
         hdrs = dict(headers or {})
         if json_data is not None:
             body = json.dumps(json_data).encode("utf-8")
@@ -95,7 +100,7 @@ class HttpSession:
             body = data.encode("utf-8") if isinstance(data, str) else data
         else:
             body = b""
-        return self._request(url, data=body, headers=hdrs, allow_redirects=allow_redirects)
+        return await self._request(url, data=body, headers=hdrs, allow_redirects=allow_redirects)
 
     @staticmethod
     def _domain_matches(cookie_domain: str, domain: str) -> bool:

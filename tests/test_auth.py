@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, AsyncMock, patch, call
 
 from minol._http import HttpResponse, HttpSession
 from minol import auth
@@ -376,7 +376,7 @@ class TestSaveSession(unittest.TestCase):
 
 # ── authenticate() ─────────────────────────────────────────────────────────────
 
-class TestAuthenticate(unittest.TestCase):
+class TestAuthenticate(unittest.IsolatedAsyncioTestCase):
 
     def _patch_steps(self, session, ticket=None):
         """Patch all 6 SAML steps and _save_session so authenticate() won't do real I/O."""
@@ -389,25 +389,25 @@ class TestAuthenticate(unittest.TestCase):
         save = patch("minol.auth._save_session")
         return step1, step2, step3, step4, step5, step6, save
 
-    def test_cache_hit_skips_saml(self):
+    async def test_cache_hit_skips_saml(self):
         session = HttpSession()
         with patch("minol.auth._restore_session", return_value=True) as mock_restore:
             with patch("minol.auth._step1_portal_entry") as mock_step1:
                 with tempfile.TemporaryDirectory() as d:
-                    auth.authenticate(session, "u@x.com", "pass", "000000000001",
-                                      session_path=Path(d) / "s.json")
+                    await auth.authenticate(session, "u@x.com", "pass", "000000000001",
+                                            session_path=Path(d) / "s.json")
         mock_restore.assert_called_once()
         mock_step1.assert_not_called()
 
-    def test_cache_miss_runs_all_six_steps(self):
+    async def test_cache_miss_runs_all_six_steps(self):
         session = HttpSession()
         patches = self._patch_steps(session)
         with patch("minol.auth._restore_session", return_value=False):
             with patches[0] as s1, patches[1] as s2, patches[2] as s3, \
                  patches[3] as s4, patches[4] as s5, patches[5] as s6, patches[6] as save:
                 with tempfile.TemporaryDirectory() as d:
-                    auth.authenticate(session, "u@x.com", "pass", "000000000001",
-                                      session_path=Path(d) / "s.json")
+                    await auth.authenticate(session, "u@x.com", "pass", "000000000001",
+                                            session_path=Path(d) / "s.json")
         s1.assert_called_once()
         s2.assert_called_once()
         s3.assert_called_once()
@@ -416,40 +416,40 @@ class TestAuthenticate(unittest.TestCase):
         s6.assert_called_once()
         save.assert_called_once()
 
-    def test_use_cache_false_skips_restore_and_save(self):
+    async def test_use_cache_false_skips_restore_and_save(self):
         session = HttpSession()
         patches = self._patch_steps(session)
         with patch("minol.auth._restore_session") as mock_restore:
             with patches[0] as s1, patches[1] as s2, patches[2] as s3, \
                  patches[3] as s4, patches[4] as s5, patches[5] as s6, patches[6] as save:
                 with tempfile.TemporaryDirectory() as d:
-                    auth.authenticate(session, "u@x.com", "pass", "000000000001",
-                                      use_cache=False,
-                                      session_path=Path(d) / "s.json")
+                    await auth.authenticate(session, "u@x.com", "pass", "000000000001",
+                                            use_cache=False,
+                                            session_path=Path(d) / "s.json")
         mock_restore.assert_not_called()
         save.assert_not_called()
 
-    def test_status_fn_called_with_progress(self):
+    async def test_status_fn_called_with_progress(self):
         session = HttpSession()
         messages = []
         patches = self._patch_steps(session)
         with patch("minol.auth._restore_session", return_value=False):
             with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
                 with tempfile.TemporaryDirectory() as d:
-                    auth.authenticate(session, "u@x.com", "pass", "000000000001",
-                                      status_fn=messages.append,
-                                      session_path=Path(d) / "s.json")
+                    await auth.authenticate(session, "u@x.com", "pass", "000000000001",
+                                            status_fn=messages.append,
+                                            session_path=Path(d) / "s.json")
         self.assertTrue(len(messages) >= 2)
         self.assertTrue(any("authenticat" in m.lower() for m in messages))
         self.assertTrue(any("success" in m.lower() for m in messages))
 
-    def test_session_data_cache_hit_skips_saml_and_file(self):
+    async def test_session_data_cache_hit_skips_saml_and_file(self):
         """When session_data is provided and cache is valid, SAML steps and file I/O are skipped."""
         session = HttpSession()
         with patch("minol.auth._restore_session_data", return_value=True) as mock_restore:
             with patch("minol.auth._step1_portal_entry") as mock_step1:
                 with patch("minol.auth._save_session") as mock_save:
-                    result = auth.authenticate(
+                    result = await auth.authenticate(
                         session, "u@x.com", "pass", "000000000001",
                         session_data={"user_num": "000000000001"},
                     )
@@ -458,7 +458,7 @@ class TestAuthenticate(unittest.TestCase):
         mock_save.assert_not_called()
         self.assertEqual(result, {"user_num": "000000000001"})
 
-    def test_session_data_cache_miss_returns_dict_no_file_write(self):
+    async def test_session_data_cache_miss_returns_dict_no_file_write(self):
         """When session_data is provided but expired, fresh login runs and cache dict is returned."""
         session = HttpSession()
         patches = self._patch_steps(session)
@@ -467,7 +467,7 @@ class TestAuthenticate(unittest.TestCase):
             with patch("minol.auth._build_cache_data", return_value=cache_dict) as mock_build:
                 with patches[0] as s1, patches[1] as s2, patches[2] as s3, \
                      patches[3] as s4, patches[4] as s5, patches[5] as s6, patches[6] as save:
-                    result = auth.authenticate(
+                    result = await auth.authenticate(
                         session, "u@x.com", "pass", "000000000001",
                         session_data={},
                     )
@@ -477,7 +477,7 @@ class TestAuthenticate(unittest.TestCase):
         mock_build.assert_called_once()
         self.assertEqual(result, cache_dict)
 
-    def test_session_data_use_cache_false_skips_restore_returns_dict(self):
+    async def test_session_data_use_cache_false_skips_restore_returns_dict(self):
         """session_data + use_cache=False: skip restore, fresh login, return dict."""
         session = HttpSession()
         patches = self._patch_steps(session)
@@ -486,7 +486,7 @@ class TestAuthenticate(unittest.TestCase):
             with patch("minol.auth._build_cache_data", return_value=cache_dict):
                 with patches[0], patches[1], patches[2], patches[3], \
                      patches[4], patches[5], patches[6] as save:
-                    result = auth.authenticate(
+                    result = await auth.authenticate(
                         session, "u@x.com", "pass", "000000000001",
                         use_cache=False, session_data={},
                     )
@@ -494,7 +494,7 @@ class TestAuthenticate(unittest.TestCase):
         save.assert_not_called()
         self.assertEqual(result, cache_dict)
 
-    def test_file_mode_fresh_login_returns_none(self):
+    async def test_file_mode_fresh_login_returns_none(self):
         """Without session_data (file mode), fresh login returns None."""
         session = HttpSession()
         patches = self._patch_steps(session)
@@ -502,7 +502,7 @@ class TestAuthenticate(unittest.TestCase):
             with patches[0], patches[1], patches[2], patches[3], \
                  patches[4], patches[5], patches[6]:
                 with tempfile.TemporaryDirectory() as d:
-                    result = auth.authenticate(
+                    result = await auth.authenticate(
                         session, "u@x.com", "pass", "000000000001",
                         session_path=Path(d) / "s.json",
                     )
@@ -511,96 +511,96 @@ class TestAuthenticate(unittest.TestCase):
 
 # ── Auth step unit tests ───────────────────────────────────────────────────────
 
-class TestStep1PortalEntry(unittest.TestCase):
+class TestStep1PortalEntry(unittest.IsolatedAsyncioTestCase):
 
-    def test_gets_portal_entry_url(self):
+    async def test_gets_portal_entry_url(self):
         session = MagicMock()
-        session.get.return_value = _make_resp(200)
+        session.get = AsyncMock(return_value=_make_resp(200))
         session.cookie_names.return_value = []
-        auth._step1_portal_entry(session)
+        await auth._step1_portal_entry(session)
         session.get.assert_called_once()
         url = session.get.call_args[0][0]
         self.assertIn("redirect2=true", url)
 
 
-class TestStep2TriggerSaml(unittest.TestCase):
+class TestStep2TriggerSaml(unittest.IsolatedAsyncioTestCase):
 
-    def test_extracts_policy_from_302(self):
+    async def test_extracts_policy_from_302(self):
         session = MagicMock()
         b2c_url = "https://minolauth.b2clogin.com/minolauth.onmicrosoft.com/B2C_1A_SIGNUP_SIGNIN/samlp/sso/login?foo=bar"
-        session.get.return_value = _make_resp(302, headers={"location": b2c_url})
-        url, policy = auth._step2_trigger_saml(session)
+        session.get = AsyncMock(return_value=_make_resp(302, headers={"location": b2c_url}))
+        url, policy = await auth._step2_trigger_saml(session)
         self.assertEqual(url, b2c_url)
         self.assertEqual(policy, "B2C_1A_SIGNUP_SIGNIN")
 
-    def test_raises_on_non_302(self):
+    async def test_raises_on_non_302(self):
         session = MagicMock()
-        session.get.return_value = _make_resp(200)
+        session.get = AsyncMock(return_value=_make_resp(200))
         with self.assertRaises(RuntimeError):
-            auth._step2_trigger_saml(session)
+            await auth._step2_trigger_saml(session)
 
-    def test_raises_if_no_policy_in_url(self):
+    async def test_raises_if_no_policy_in_url(self):
         session = MagicMock()
-        session.get.return_value = _make_resp(302, headers={"location": "https://b2c.example.com/no-policy-here"})
+        session.get = AsyncMock(return_value=_make_resp(302, headers={"location": "https://b2c.example.com/no-policy-here"}))
         with self.assertRaises(RuntimeError):
-            auth._step2_trigger_saml(session)
+            await auth._step2_trigger_saml(session)
 
 
-class TestStep3LoadB2cLogin(unittest.TestCase):
+class TestStep3LoadB2cLogin(unittest.IsolatedAsyncioTestCase):
 
-    def test_extracts_csrf_and_state(self):
+    async def test_extracts_csrf_and_state(self):
         session = MagicMock()
         page_html = '<html><script>var x = "StateProperties=ABCDEF123";</script></html>'
-        session.get.return_value = _make_resp(200, text=page_html)
+        session.get = AsyncMock(return_value=_make_resp(200, text=page_html))
         session.get_cookie.return_value = "csrf_token_value"
-        csrf, tx, html = auth._step3_load_b2c_login(session, "https://b2c.example.com/")
+        csrf, tx, html = await auth._step3_load_b2c_login(session, "https://b2c.example.com/")
         self.assertEqual(csrf, "csrf_token_value")
         self.assertIn("StateProperties=", tx)
         self.assertEqual(html, page_html)
 
-    def test_raises_if_no_csrf_cookie(self):
+    async def test_raises_if_no_csrf_cookie(self):
         session = MagicMock()
-        session.get.return_value = _make_resp(200, text="<html/>")
+        session.get = AsyncMock(return_value=_make_resp(200, text="<html/>"))
         session.get_cookie.return_value = None
         with self.assertRaises(RuntimeError):
-            auth._step3_load_b2c_login(session, "https://b2c.example.com/")
+            await auth._step3_load_b2c_login(session, "https://b2c.example.com/")
 
 
-class TestStep4SubmitCredentials(unittest.TestCase):
+class TestStep4SubmitCredentials(unittest.IsolatedAsyncioTestCase):
 
-    def test_posts_credentials_successfully(self):
+    async def test_posts_credentials_successfully(self):
         session = MagicMock()
         resp_200_ok = _make_resp(200, text=json.dumps({"status": "200"}))
-        session.post.return_value = resp_200_ok
+        session.post = AsyncMock(return_value=resp_200_ok)
         # Should not raise
-        auth._step4_submit_credentials(
+        await auth._step4_submit_credentials(
             session, "B2C_1A_POLICY", "user@x.com", "pass",
             "csrf_tok", "StateProperties=X", "<html/>"
         )
         session.post.assert_called_once()
 
-    def test_raises_on_status_400_json(self):
+    async def test_raises_on_status_400_json(self):
         session = MagicMock()
-        session.post.return_value = _make_resp(200, text=json.dumps({"status": "400", "message": "Bad creds"}))
+        session.post = AsyncMock(return_value=_make_resp(200, text=json.dumps({"status": "400", "message": "Bad creds"})))
         with self.assertRaises(RuntimeError, msg="Bad creds"):
-            auth._step4_submit_credentials(
+            await auth._step4_submit_credentials(
                 session, "B2C_1A_POLICY", "user@x.com", "wrongpass",
                 "csrf_tok", "StateProperties=X", "<html/>"
             )
 
-    def test_raises_on_http_error(self):
+    async def test_raises_on_http_error(self):
         session = MagicMock()
-        session.post.return_value = _make_resp(500, text="Server Error")
+        session.post = AsyncMock(return_value=_make_resp(500, text="Server Error"))
         with self.assertRaises(RuntimeError):
-            auth._step4_submit_credentials(
+            await auth._step4_submit_credentials(
                 session, "B2C_1A_POLICY", "user@x.com", "pass",
                 "csrf_tok", "StateProperties=X", "<html/>"
             )
 
 
-class TestStep5GetSamlResponse(unittest.TestCase):
+class TestStep5GetSamlResponse(unittest.IsolatedAsyncioTestCase):
 
-    def test_extracts_saml_form(self):
+    async def test_extracts_saml_form(self):
         session = MagicMock()
         html = (
             '<form action="https://sap.example.com/saml/acs">'
@@ -608,45 +608,45 @@ class TestStep5GetSamlResponse(unittest.TestCase):
             '<input name="RelayState" value="relay"/>'
             '</form>'
         )
-        session.get.return_value = _make_resp(200, text=html)
-        acs_url, fields = auth._step5_get_saml_response(
+        session.get = AsyncMock(return_value=_make_resp(200, text=html))
+        acs_url, fields = await auth._step5_get_saml_response(
             session, "B2C_1A_POLICY", "csrf", "StateProperties=X"
         )
         self.assertEqual(acs_url, "https://sap.example.com/saml/acs")
         self.assertIn("SAMLResponse", fields)
         self.assertEqual(fields["SAMLResponse"], "samlbase64data")
 
-    def test_raises_if_no_form(self):
+    async def test_raises_if_no_form(self):
         session = MagicMock()
-        session.get.return_value = _make_resp(200, text="<html>no form here</html>")
+        session.get = AsyncMock(return_value=_make_resp(200, text="<html>no form here</html>"))
         with self.assertRaises(RuntimeError):
-            auth._step5_get_saml_response(
+            await auth._step5_get_saml_response(
                 session, "B2C_1A_POLICY", "csrf", "StateProperties=X"
             )
 
-    def test_raises_if_form_has_no_saml_response(self):
+    async def test_raises_if_form_has_no_saml_response(self):
         session = MagicMock()
         html = '<form action="/x"><input name="other" value="val"/></form>'
-        session.get.return_value = _make_resp(200, text=html)
+        session.get = AsyncMock(return_value=_make_resp(200, text=html))
         with self.assertRaises(RuntimeError):
-            auth._step5_get_saml_response(
+            await auth._step5_get_saml_response(
                 session, "B2C_1A_POLICY", "csrf", "StateProperties=X"
             )
 
 
-class TestStep6PostToSapAcs(unittest.TestCase):
+class TestStep6PostToSapAcs(unittest.IsolatedAsyncioTestCase):
 
-    def test_raises_if_no_mysapsso2_cookie(self):
+    async def test_raises_if_no_mysapsso2_cookie(self):
         session = MagicMock()
-        session.post.return_value = _make_resp(302, headers={"location": "/portal"})
-        session.get.return_value = _make_resp(200)
+        session.post = AsyncMock(return_value=_make_resp(302, headers={"location": "/portal"}))
+        session.get = AsyncMock(return_value=_make_resp(200))
         session.get_cookie.return_value = None
         session.all_cookies.return_value = []
         with self.assertRaises(RuntimeError):
-            auth._step6_post_to_sap_acs(session, "https://sap.example.com/acs",
-                                        {"SAMLResponse": "data"})
+            await auth._step6_post_to_sap_acs(session, "https://sap.example.com/acs",
+                                              {"SAMLResponse": "data"})
 
-    def test_success_with_chained_form(self):
+    async def test_success_with_chained_form(self):
         """200 response with chained form → follows the chain, ends with MYSAPSSO2."""
         session = MagicMock()
         chained_html = (
@@ -654,27 +654,27 @@ class TestStep6PostToSapAcs(unittest.TestCase):
             '<input name="sap-token" value="TOKEN"/>'
             '</form>'
         )
-        session.post.side_effect = [
+        session.post = AsyncMock(side_effect=[
             _make_resp(200, text=chained_html),           # first POST to ACS
             _make_resp(302, headers={"location": "/irj/portal"}),  # chained POST
-        ]
-        session.get.return_value = _make_resp(200, text="<html>Portal</html>")
+        ])
+        session.get = AsyncMock(return_value=_make_resp(200, text="<html>Portal</html>"))
         session.get_cookie.return_value = "TICKET_VALUE"  # MYSAPSSO2 found
 
         # Should not raise
-        auth._step6_post_to_sap_acs(session, "https://sap.example.com/acs",
-                                    {"SAMLResponse": "data"})
+        await auth._step6_post_to_sap_acs(session, "https://sap.example.com/acs",
+                                          {"SAMLResponse": "data"})
         session.get_cookie.assert_called()
 
-    def test_success_with_direct_302(self):
+    async def test_success_with_direct_302(self):
         """302 response directly → follows redirect, ends with MYSAPSSO2."""
         session = MagicMock()
-        session.post.return_value = _make_resp(302, headers={"location": "/irj/portal"})
-        session.get.return_value = _make_resp(200, text="<html>Portal</html>")
+        session.post = AsyncMock(return_value=_make_resp(302, headers={"location": "/irj/portal"}))
+        session.get = AsyncMock(return_value=_make_resp(200, text="<html>Portal</html>"))
         session.get_cookie.return_value = "TICKET_VALUE"
 
-        auth._step6_post_to_sap_acs(session, "https://sap.example.com/acs",
-                                    {"SAMLResponse": "data"})
+        await auth._step6_post_to_sap_acs(session, "https://sap.example.com/acs",
+                                          {"SAMLResponse": "data"})
         session.get_cookie.assert_called()
 
 

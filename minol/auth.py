@@ -6,6 +6,7 @@ SAP Enterprise Portal, and Azure AD B2C. Includes session caching
 so subsequent runs skip the full SAML flow when the token is still valid.
 """
 
+import asyncio
 import os
 import re
 import json
@@ -33,16 +34,16 @@ def _mask_email(email: str) -> str:
     return re.sub(r'^(.)', r'\1***', local) + '@' + domain
 
 
-def _step1_portal_entry(session: HttpSession):
+async def _step1_portal_entry(session: HttpSession):
     """GET /?redirect2=true -> picks up PortalAlias, saplb_* cookies."""
     log.info("Step 1: Hitting portal entry point...")
-    resp = session.get(f"{PORTAL_BASE}/?redirect2=true")
+    resp = await session.get(f"{PORTAL_BASE}/?redirect2=true")
     log.info(f"  Status: {resp.status_code}")
     log.info(f"  Cookies: {session.cookie_names()}")
     return resp
 
 
-def _step2_trigger_saml(session: HttpSession) -> tuple[str, str]:
+async def _step2_trigger_saml(session: HttpSession) -> tuple[str, str]:
     """GET the SAML login initiator -> follows 302 to B2C.
 
     Returns (b2c_url, b2c_policy).
@@ -53,7 +54,7 @@ def _step2_trigger_saml(session: HttpSession) -> tuple[str, str]:
         f"?logonTargetUrl=https%3A%2F%2Fwebservices.minol.com%2F"
         f"&saml2idp=B2C-Minol"
     )
-    resp = session.get(saml_init_url, allow_redirects=False)
+    resp = await session.get(saml_init_url, allow_redirects=False)
     log.info(f"  Status: {resp.status_code}")
 
     if resp.status_code != 302:
@@ -103,13 +104,13 @@ def _extract_state_properties(session: HttpSession, page_html: str) -> str:
     raise RuntimeError("Could not extract transaction StateProperties")
 
 
-def _step3_load_b2c_login(session: HttpSession, b2c_url: str) -> tuple[str, str, str]:
+async def _step3_load_b2c_login(session: HttpSession, b2c_url: str) -> tuple[str, str, str]:
     """GET the B2C login page -> picks up CSRF token and session cookies.
 
     Returns (csrf_token, tx_value, page_html).
     """
     log.info("Step 3: Loading B2C login page...")
-    resp = session.get(b2c_url)
+    resp = await session.get(b2c_url)
     log.info(f"  Status: {resp.status_code}")
     log.info(f"  B2C cookies: {session.cookie_names(B2C_DOMAIN)}")
 
@@ -122,9 +123,9 @@ def _step3_load_b2c_login(session: HttpSession, b2c_url: str) -> tuple[str, str,
     return csrf_token, tx_value, resp.text
 
 
-def _step4_submit_credentials(session: HttpSession, b2c_policy: str,
-                              email: str, password: str,
-                              csrf_token: str, tx_value: str, page_html: str):
+async def _step4_submit_credentials(session: HttpSession, b2c_policy: str,
+                                    email: str, password: str,
+                                    csrf_token: str, tx_value: str, page_html: str):
     """POST credentials to B2C's SelfAsserted endpoint."""
     log.info("Step 4: Submitting credentials to B2C SelfAsserted...")
 
@@ -173,7 +174,7 @@ def _step4_submit_credentials(session: HttpSession, b2c_policy: str,
         "Sec-Fetch-Site": "same-origin",
     }
 
-    resp = session.post(self_asserted_url, data=payload, headers=headers)
+    resp = await session.post(self_asserted_url, data=payload, headers=headers)
     log.info(f"  Status: {resp.status_code}")
     log.debug(f"  Response: {resp.text[:300] if resp.text else '(empty)'}")
 
@@ -198,8 +199,8 @@ def _step4_submit_credentials(session: HttpSession, b2c_policy: str,
     return resp
 
 
-def _step5_get_saml_response(session: HttpSession, b2c_policy: str,
-                             csrf_token: str, tx_value: str) -> tuple[str, dict]:
+async def _step5_get_saml_response(session: HttpSession, b2c_policy: str,
+                                   csrf_token: str, tx_value: str) -> tuple[str, dict]:
     """GET CombinedSigninAndSignup/confirmed -> returns (acs_url, form_fields)."""
     log.info("Step 5: Confirming authentication, retrieving SAML response...")
 
@@ -212,7 +213,7 @@ def _step5_get_saml_response(session: HttpSession, b2c_policy: str,
         f"&p={b2c_policy}"
     )
 
-    resp = session.get(confirmed_url)
+    resp = await session.get(confirmed_url)
     log.info(f"  Status: {resp.status_code}")
 
     forms = parse_forms(resp.text)
@@ -237,11 +238,11 @@ def _step5_get_saml_response(session: HttpSession, b2c_policy: str,
     return form["action"], form["fields"]
 
 
-def _step6_post_to_sap_acs(session: HttpSession, acs_url: str, form_data: dict):
+async def _step6_post_to_sap_acs(session: HttpSession, acs_url: str, form_data: dict):
     """POST SAMLResponse to SAP's ACS endpoint, follow chained form POSTs."""
     log.info("Step 6: Posting SAML response to SAP ACS...")
 
-    resp = session.post(
+    resp = await session.post(
         acs_url,
         data=urlencode(form_data),
         headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -255,7 +256,7 @@ def _step6_post_to_sap_acs(session: HttpSession, acs_url: str, form_data: dict):
             next_url = resolve_url(forms[0]["action"])
             log.info(f"  Chained form POST to: {next_url}")
 
-            resp2 = session.post(
+            resp2 = await session.post(
                 next_url,
                 data=urlencode(forms[0]["fields"]),
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -266,13 +267,13 @@ def _step6_post_to_sap_acs(session: HttpSession, acs_url: str, form_data: dict):
             if resp2.status_code == 302:
                 location = resolve_url(resp2.headers.get("location", ""))
                 log.info(f"  Redirect to: {location}")
-                resp3 = session.get(location)
+                resp3 = await session.get(location)
                 log.info(f"  Final status: {resp3.status_code}")
 
     elif resp.status_code == 302:
         location = resolve_url(resp.headers.get("location", ""))
         log.info(f"  Direct redirect to: {location}")
-        session.get(location)
+        await session.get(location)
 
     mysapsso2 = session.get_cookie("MYSAPSSO2")
 
@@ -432,7 +433,7 @@ def _restore_session_data(session: HttpSession, user_num: str, cache: dict,
     return _load_cache_data(session, user_num, cache, status_fn)
 
 
-def authenticate(
+async def authenticate(
     session: HttpSession,
     email: str,
     password: str,
@@ -481,14 +482,14 @@ def authenticate(
         status_fn("Authenticating...")
     log.info("Starting Minol portal authentication...")
 
-    _step1_portal_entry(session)
-    b2c_url, b2c_policy = _step2_trigger_saml(session)
-    csrf_token, tx_value, page_html = _step3_load_b2c_login(session, b2c_url)
-    _step4_submit_credentials(session, b2c_policy, email, password,
-                              csrf_token, tx_value, page_html)
-    acs_url, form_data = _step5_get_saml_response(session, b2c_policy,
-                                                   csrf_token, tx_value)
-    _step6_post_to_sap_acs(session, acs_url, form_data)
+    await _step1_portal_entry(session)
+    b2c_url, b2c_policy = await _step2_trigger_saml(session)
+    csrf_token, tx_value, page_html = await _step3_load_b2c_login(session, b2c_url)
+    await _step4_submit_credentials(session, b2c_policy, email, password,
+                                    csrf_token, tx_value, page_html)
+    acs_url, form_data = await _step5_get_saml_response(session, b2c_policy,
+                                                        csrf_token, tx_value)
+    await _step6_post_to_sap_acs(session, acs_url, form_data)
 
     if status_fn:
         status_fn("Authentication successful.")

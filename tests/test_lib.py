@@ -5,7 +5,7 @@ import sys
 import unittest
 from io import StringIO
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, AsyncMock, patch, call
 
 from minol._constants import CONSUMPTION_TYPES, DATA_ENDPOINT
 from minol._http import HttpResponse
@@ -47,12 +47,12 @@ class TestMinolScraperInit(unittest.TestCase):
 
 # ── login() ────────────────────────────────────────────────────────────────────
 
-class TestMinolScraperLogin(unittest.TestCase):
+class TestMinolScraperLogin(unittest.IsolatedAsyncioTestCase):
 
-    def test_login_delegates_to_auth_and_sets_authenticated(self):
+    async def test_login_delegates_to_auth_and_sets_authenticated(self):
         s = MinolScraper("a@b.com", "secret", "000000000001")
         with patch("minol.auth.authenticate") as mock_auth:
-            s.login()
+            await s.login()
         mock_auth.assert_called_once_with(
             s.session, "a@b.com", "secret", "000000000001",
             status_fn=s._status, use_cache=True, session_path=None,
@@ -60,41 +60,41 @@ class TestMinolScraperLogin(unittest.TestCase):
         )
         self.assertTrue(s.authenticated)
 
-    def test_login_forwards_session_path(self):
+    async def test_login_forwards_session_path(self):
         s = MinolScraper("a@b.com", "secret", "000000000001")
         with patch("minol.auth.authenticate") as mock_auth:
-            s.login(session_path=Path("/tmp/custom.json"))
+            await s.login(session_path=Path("/tmp/custom.json"))
         _, kwargs = mock_auth.call_args
         self.assertEqual(kwargs["session_path"], Path("/tmp/custom.json"))
 
-    def test_login_passes_use_cache_false(self):
+    async def test_login_passes_use_cache_false(self):
         s = MinolScraper("a@b.com", "secret", "000000000001")
         with patch("minol.auth.authenticate") as mock_auth:
-            s.login(use_cache=False)
+            await s.login(use_cache=False)
         _, kwargs = mock_auth.call_args
         self.assertFalse(kwargs["use_cache"])
 
-    def test_login_forwards_session_data(self):
+    async def test_login_forwards_session_data(self):
         s = MinolScraper("a@b.com", "secret", "000000000001")
         cache = {"user_num": "000000000001", "cookies": []}
         with patch("minol.auth.authenticate") as mock_auth:
-            s.login(session_data=cache)
+            await s.login(session_data=cache)
         _, kwargs = mock_auth.call_args
         self.assertEqual(kwargs["session_data"], cache)
 
-    def test_login_returns_dict_from_authenticate(self):
+    async def test_login_returns_dict_from_authenticate(self):
         """login() passes through the dict returned by authenticate() (in-memory mode)."""
         s = MinolScraper("a@b.com", "secret", "000000000001")
         new_cache = {"user_num": "000000000001", "expires_at": "2099-01-01T00:00:00+00:00", "cookies": []}
         with patch("minol.auth.authenticate", return_value=new_cache):
-            result = s.login(session_data={})
+            result = await s.login(session_data={})
         self.assertEqual(result, new_cache)
 
-    def test_login_returns_none_in_file_mode(self):
+    async def test_login_returns_none_in_file_mode(self):
         """login() returns None when no session_data is provided (file mode)."""
         s = MinolScraper("a@b.com", "secret", "000000000001")
         with patch("minol.auth.authenticate", return_value=None):
-            result = s.login()
+            result = await s.login()
         self.assertIsNone(result)
 
 
@@ -172,7 +172,7 @@ class TestParseResponse(unittest.TestCase):
 
 # ── fetch_consumption() ────────────────────────────────────────────────────────
 
-class TestFetchConsumption(unittest.TestCase):
+class TestFetchConsumption(unittest.IsolatedAsyncioTestCase):
 
     def _authenticated_scraper(self):
         s = MinolScraper("a@b.com", "secret", "000000000001",
@@ -180,102 +180,102 @@ class TestFetchConsumption(unittest.TestCase):
         s.authenticated = True
         return s
 
-    def test_raises_if_not_authenticated(self):
+    async def test_raises_if_not_authenticated(self):
         s = MinolScraper("a@b.com", "secret", "000000000001")
         with self.assertRaises(RuntimeError):
-            s.fetch_consumption("HEIZUNG", "100EHRAUM")
+            await s.fetch_consumption("HEIZUNG", "100EHRAUM")
 
-    def test_raises_on_invalid_timeline_format(self):
+    async def test_raises_on_invalid_timeline_format(self):
         s = self._authenticated_scraper()
         with self.assertRaises(ValueError):
-            s.fetch_consumption("HEIZUNG", "100EHRAUM", timeline_start="2025-01")
+            await s.fetch_consumption("HEIZUNG", "100EHRAUM", timeline_start="2025-01")
 
-    def test_raises_on_invalid_timeline_end(self):
+    async def test_raises_on_invalid_timeline_end(self):
         s = self._authenticated_scraper()
         with self.assertRaises(ValueError):
-            s.fetch_consumption("HEIZUNG", "100EHRAUM",
-                                timeline_start="202501", timeline_end="25-01")
+            await s.fetch_consumption("HEIZUNG", "100EHRAUM",
+                                      timeline_start="202501", timeline_end="25-01")
 
-    def test_valid_request_returns_parsed_data(self):
+    async def test_valid_request_returns_parsed_data(self):
         s = self._authenticated_scraper()
         api_data = {
             "table": [{"raum": "Room1", "consumption": 5.0, "gerNr": "D1", "unit": "KWH"}],
             "chart": [],
         }
-        with patch.object(s.session, "post", return_value=_make_resp(200, data=api_data)):
-            result = s.fetch_consumption("HEIZUNG", "100EHRAUM",
-                                         timeline_start="202501", timeline_end="202503")
+        s.session.post = AsyncMock(return_value=_make_resp(200, data=api_data))
+        result = await s.fetch_consumption("HEIZUNG", "100EHRAUM",
+                                           timeline_start="202501", timeline_end="202503")
         self.assertIn("rooms", result)
         self.assertIn("Room1", result["rooms"])
 
-    def test_raw_true_returns_raw_json(self):
+    async def test_raw_true_returns_raw_json(self):
         s = self._authenticated_scraper()
         api_data = {"table": [], "chart": [], "extra": "data"}
-        with patch.object(s.session, "post", return_value=_make_resp(200, data=api_data)):
-            result = s.fetch_consumption("HEIZUNG", "100EHRAUM", raw=True,
-                                         timeline_start="202501", timeline_end="202503")
+        s.session.post = AsyncMock(return_value=_make_resp(200, data=api_data))
+        result = await s.fetch_consumption("HEIZUNG", "100EHRAUM", raw=True,
+                                           timeline_start="202501", timeline_end="202503")
         self.assertEqual(result, api_data)
 
-    def test_unit_kwh_sets_values_in_kwh_true(self):
+    async def test_unit_kwh_sets_values_in_kwh_true(self):
         s = self._authenticated_scraper()
         api_data = {"table": [], "chart": []}
         captured = {}
 
-        def fake_post(url, json_data=None, headers=None, allow_redirects=True):
+        async def fake_post(url, json_data=None, headers=None, allow_redirects=True):
             captured["payload"] = json_data
             return _make_resp(200, data=api_data)
 
-        with patch.object(s.session, "post", side_effect=fake_post):
-            s.fetch_consumption("WARMWASSER", "200RAUM", unit="kwh",
-                                timeline_start="202501", timeline_end="202503")
+        s.session.post = AsyncMock(side_effect=fake_post)
+        await s.fetch_consumption("WARMWASSER", "200RAUM", unit="kwh",
+                                  timeline_start="202501", timeline_end="202503")
         self.assertTrue(captured["payload"]["valuesInKWH"])
 
-    def test_unit_m3_sets_values_in_kwh_false(self):
+    async def test_unit_m3_sets_values_in_kwh_false(self):
         s = self._authenticated_scraper()
         api_data = {"table": [], "chart": []}
         captured = {}
 
-        def fake_post(url, json_data=None, headers=None, allow_redirects=True):
+        async def fake_post(url, json_data=None, headers=None, allow_redirects=True):
             captured["payload"] = json_data
             return _make_resp(200, data=api_data)
 
-        with patch.object(s.session, "post", side_effect=fake_post):
-            s.fetch_consumption("HEIZUNG", "100EHRAUM", unit="m3",
-                                timeline_start="202501", timeline_end="202503")
+        s.session.post = AsyncMock(side_effect=fake_post)
+        await s.fetch_consumption("HEIZUNG", "100EHRAUM", unit="m3",
+                                  timeline_start="202501", timeline_end="202503")
         self.assertFalse(captured["payload"]["valuesInKWH"])
 
-    def test_heating_default_unit_is_kwh(self):
+    async def test_heating_default_unit_is_kwh(self):
         s = self._authenticated_scraper()
         api_data = {"table": [], "chart": []}
         captured = {}
 
-        def fake_post(url, json_data=None, headers=None, allow_redirects=True):
+        async def fake_post(url, json_data=None, headers=None, allow_redirects=True):
             captured["payload"] = json_data
             return _make_resp(200, data=api_data)
 
-        with patch.object(s.session, "post", side_effect=fake_post):
-            s.fetch_consumption("HEIZUNG", "100EHRAUM",
-                                timeline_start="202501", timeline_end="202503")
+        s.session.post = AsyncMock(side_effect=fake_post)
+        await s.fetch_consumption("HEIZUNG", "100EHRAUM",
+                                  timeline_start="202501", timeline_end="202503")
         self.assertTrue(captured["payload"]["valuesInKWH"])
 
-    def test_non_200_raises_runtime_error(self):
+    async def test_non_200_raises_runtime_error(self):
         s = self._authenticated_scraper()
-        with patch.object(s.session, "post", return_value=_make_resp(500, text="error")):
-            with self.assertRaises(RuntimeError):
-                s.fetch_consumption("HEIZUNG", "100EHRAUM",
-                                    timeline_start="202501", timeline_end="202503")
+        s.session.post = AsyncMock(return_value=_make_resp(500, text="error"))
+        with self.assertRaises(RuntimeError):
+            await s.fetch_consumption("HEIZUNG", "100EHRAUM",
+                                      timeline_start="202501", timeline_end="202503")
 
-    def test_default_timeline_set_when_not_provided(self):
+    async def test_default_timeline_set_when_not_provided(self):
         s = self._authenticated_scraper()
         api_data = {"table": [], "chart": []}
         captured = {}
 
-        def fake_post(url, json_data=None, headers=None, allow_redirects=True):
+        async def fake_post(url, json_data=None, headers=None, allow_redirects=True):
             captured["payload"] = json_data
             return _make_resp(200, data=api_data)
 
-        with patch.object(s.session, "post", side_effect=fake_post):
-            s.fetch_consumption("HEIZUNG", "100EHRAUM")
+        s.session.post = AsyncMock(side_effect=fake_post)
+        await s.fetch_consumption("HEIZUNG", "100EHRAUM")
 
         self.assertRegex(captured["payload"]["timelineEnd"], r"^\d{6}$")
         self.assertRegex(captured["payload"]["timelineStart"], r"^\d{6}$")
@@ -283,7 +283,7 @@ class TestFetchConsumption(unittest.TestCase):
 
 # ── Convenience methods ────────────────────────────────────────────────────────
 
-class TestConvenienceMethods(unittest.TestCase):
+class TestConvenienceMethods(unittest.IsolatedAsyncioTestCase):
 
     def _scraper_with_mock_fetch(self):
         s = MinolScraper("a@b.com", "secret", "000000000001",
@@ -293,55 +293,55 @@ class TestConvenienceMethods(unittest.TestCase):
 
     def _mock_fetch(self, s, return_value=None):
         rv = return_value or {"unit": "", "rooms": {}}
-        mock = MagicMock(return_value=rv)
+        mock = AsyncMock(return_value=rv)
         s.fetch_consumption = mock
         return mock
 
-    def test_fetch_heating_uses_correct_type(self):
+    async def test_fetch_heating_uses_correct_type(self):
         s = self._scraper_with_mock_fetch()
         m = self._mock_fetch(s)
-        s.fetch_heating()
+        await s.fetch_heating()
         m.assert_called_once_with(*CONSUMPTION_TYPES["heating"])
 
-    def test_fetch_warm_water_uses_correct_type(self):
+    async def test_fetch_warm_water_uses_correct_type(self):
         s = self._scraper_with_mock_fetch()
         m = self._mock_fetch(s)
-        s.fetch_warm_water()
+        await s.fetch_warm_water()
         m.assert_called_once_with(*CONSUMPTION_TYPES["warm_water"])
 
-    def test_fetch_cold_water_uses_correct_type(self):
+    async def test_fetch_cold_water_uses_correct_type(self):
         s = self._scraper_with_mock_fetch()
         m = self._mock_fetch(s)
-        s.fetch_cold_water()
+        await s.fetch_cold_water()
         m.assert_called_once_with(*CONSUMPTION_TYPES["cold_water"])
 
-    def test_fetch_all_returns_all_types(self):
+    async def test_fetch_all_returns_all_types(self):
         s = self._scraper_with_mock_fetch()
         call_count = [0]
         results = {}
 
-        def fake_fetch(cons_type, dlg_key, **kwargs):
+        async def fake_fetch(cons_type, dlg_key, **kwargs):
             call_count[0] += 1
             results[cons_type] = {"unit": "", "rooms": {}}
             return results[cons_type]
 
         s.fetch_consumption = fake_fetch
-        data = s.fetch_all()
+        data = await s.fetch_all()
         self.assertEqual(call_count[0], 3)
         self.assertIn("heating", data)
         self.assertIn("warm_water", data)
         self.assertIn("cold_water", data)
 
-    def test_fetch_all_raw_passes_raw_true(self):
+    async def test_fetch_all_raw_passes_raw_true(self):
         s = self._scraper_with_mock_fetch()
         captured_kwargs = []
 
-        def fake_fetch(cons_type, dlg_key, **kwargs):
+        async def fake_fetch(cons_type, dlg_key, **kwargs):
             captured_kwargs.append(kwargs)
             return {}
 
         s.fetch_consumption = fake_fetch
-        s.fetch_all_raw()
+        await s.fetch_all_raw()
         self.assertTrue(all(kw.get("raw") is True for kw in captured_kwargs))
 
 

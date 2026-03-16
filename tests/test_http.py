@@ -113,7 +113,7 @@ class TestHttpSessionCookies(unittest.TestCase):
         self.assertNotIn("beta", names)
 
 
-class TestHttpSessionRequests(unittest.TestCase):
+class TestHttpSessionRequests(unittest.IsolatedAsyncioTestCase):
 
     def _fake_response(self, status=200, body=b"ok", headers=None, url="https://x.com/"):
         resp = MagicMock()
@@ -125,16 +125,16 @@ class TestHttpSessionRequests(unittest.TestCase):
         resp.headers = hdr
         return resp
 
-    def test_get_returns_http_response(self):
+    async def test_get_returns_http_response(self):
         session = HttpSession()
         fake = self._fake_response(200, b"hello", {}, "https://x.com/")
         with patch.object(session._opener, "open", return_value=fake) as mock_open:
-            resp = session.get("https://x.com/")
+            resp = await session.get("https://x.com/")
         self.assertIsInstance(resp, HttpResponse)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.text, "hello")
 
-    def test_post_with_data_string_encodes_utf8(self):
+    async def test_post_with_data_string_encodes_utf8(self):
         session = HttpSession()
         captured = {}
         fake = self._fake_response(200, b"{}", {})
@@ -144,11 +144,11 @@ class TestHttpSessionRequests(unittest.TestCase):
             return fake
 
         with patch.object(session._opener, "open", side_effect=fake_open):
-            session.post("https://x.com/", data="a=1&b=2")
+            await session.post("https://x.com/", data="a=1&b=2")
 
         self.assertEqual(captured["data"], b"a=1&b=2")
 
-    def test_post_with_json_data_serializes_and_sets_content_type(self):
+    async def test_post_with_json_data_serializes_and_sets_content_type(self):
         session = HttpSession()
         captured = {}
         fake = self._fake_response(200, b"{}", {})
@@ -159,14 +159,14 @@ class TestHttpSessionRequests(unittest.TestCase):
             return fake
 
         with patch.object(session._opener, "open", side_effect=fake_open):
-            session.post("https://x.com/", json_data={"key": "value"})
+            await session.post("https://x.com/", json_data={"key": "value"})
 
         self.assertEqual(json.loads(captured["data"]), {"key": "value"})
         # Headers are title-cased by urllib Request
         content_type = captured["headers"].get("Content-type", "")
         self.assertIn("application/json", content_type)
 
-    def test_post_with_no_body_sends_empty_bytes(self):
+    async def test_post_with_no_body_sends_empty_bytes(self):
         session = HttpSession()
         captured = {}
         fake = self._fake_response(200, b"{}", {})
@@ -176,19 +176,19 @@ class TestHttpSessionRequests(unittest.TestCase):
             return fake
 
         with patch.object(session._opener, "open", side_effect=fake_open):
-            session.post("https://x.com/")
+            await session.post("https://x.com/")
 
         self.assertEqual(captured["data"], b"")
 
-    def test_allow_redirects_false_uses_no_redirect_opener(self):
+    async def test_allow_redirects_false_uses_no_redirect_opener(self):
         session = HttpSession()
         fake = self._fake_response(302, b"", {"location": "https://other.com/"})
         with patch.object(session._no_redirect_opener, "open", return_value=fake) as mock_open:
-            resp = session.get("https://x.com/", allow_redirects=False)
+            resp = await session.get("https://x.com/", allow_redirects=False)
         mock_open.assert_called_once()
         self.assertEqual(resp.status_code, 302)
 
-    def test_http_error_returns_error_response(self):
+    async def test_http_error_returns_error_response(self):
         from urllib.error import HTTPError
         from io import BytesIO
 
@@ -199,17 +199,17 @@ class TestHttpSessionRequests(unittest.TestCase):
         http_err = HTTPError("https://x.com/missing", 404, "Not Found", hdr, err_body)
 
         with patch.object(session._opener, "open", side_effect=http_err):
-            resp = session.get("https://x.com/missing")
+            resp = await session.get("https://x.com/missing")
 
         self.assertEqual(resp.status_code, 404)
         self.assertEqual(resp.text, "Not Found")
 
-    def test_get_uses_default_opener(self):
+    async def test_get_uses_default_opener(self):
         session = HttpSession()
         fake = self._fake_response(200, b"body")
         with patch.object(session._opener, "open", return_value=fake) as mock_open:
             with patch.object(session._no_redirect_opener, "open") as mock_no_redir:
-                session.get("https://x.com/")
+                await session.get("https://x.com/")
         mock_open.assert_called_once()
         mock_no_redir.assert_not_called()
 

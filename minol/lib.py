@@ -1,5 +1,6 @@
 """MinolScraper class: data fetching and login orchestration."""
 
+import asyncio
 import re
 import json
 import logging
@@ -32,8 +33,8 @@ class MinolScraper:
         self._status = status_fn or (lambda msg: None)
 
     # ── Full login flow ────────────────────────────────────────────────────
-    def login(self, use_cache: bool = True, session_path: Path = None,
-              session_data: dict = None) -> "dict | None":
+    async def login(self, use_cache: bool = True, session_path: Path = None,
+                    session_data: dict = None) -> "dict | None":
         """
         Authenticate to the Minol portal.
 
@@ -49,7 +50,7 @@ class MinolScraper:
             The session cache dict when session_data is provided (existing dict
             on cache hit, new dict after a fresh login); None otherwise (file mode).
         """
-        result = auth.authenticate(
+        result = await auth.authenticate(
             self.session, self.email, self.password, self.user_num,
             status_fn=self._status, use_cache=use_cache,
             session_path=session_path, session_data=session_data,
@@ -100,7 +101,7 @@ class MinolScraper:
 
         return {"unit": unit, "rooms": rooms}
 
-    def fetch_consumption(
+    async def fetch_consumption(
         self,
         cons_type: str,
         dlg_key: str,
@@ -158,7 +159,7 @@ class MinolScraper:
         self._status(f"Fetching {cons_type} ({timeline_start} to {timeline_end})...")
         log.info(f"Fetching {cons_type} data ({timeline_start} -> {timeline_end})...")
 
-        resp = self.session.post(DATA_ENDPOINT, json_data=payload, headers=self._DATA_HEADERS)
+        resp = await self.session.post(DATA_ENDPOINT, json_data=payload, headers=self._DATA_HEADERS)
         log.info(f"  Status: {resp.status_code}")
 
         if resp.status_code != 200:
@@ -169,21 +170,24 @@ class MinolScraper:
         log.info(f"  Data received: {json.dumps(data, indent=2)[:500]}...")
         return data if raw else self._parse_response(data)
 
-    def fetch_heating(self, **kwargs) -> dict:
-        return self.fetch_consumption(*CONSUMPTION_TYPES["heating"], **kwargs)
+    async def fetch_heating(self, **kwargs) -> dict:
+        return await self.fetch_consumption(*CONSUMPTION_TYPES["heating"], **kwargs)
 
-    def fetch_warm_water(self, **kwargs) -> dict:
-        return self.fetch_consumption(*CONSUMPTION_TYPES["warm_water"], **kwargs)
+    async def fetch_warm_water(self, **kwargs) -> dict:
+        return await self.fetch_consumption(*CONSUMPTION_TYPES["warm_water"], **kwargs)
 
-    def fetch_cold_water(self, **kwargs) -> dict:
-        return self.fetch_consumption(*CONSUMPTION_TYPES["cold_water"], **kwargs)
+    async def fetch_cold_water(self, **kwargs) -> dict:
+        return await self.fetch_consumption(*CONSUMPTION_TYPES["cold_water"], **kwargs)
 
-    def fetch_all(self, **kwargs) -> dict:
-        """Fetch all three consumption types."""
-        return {name: self.fetch_consumption(*args, **kwargs)
-                for name, args in CONSUMPTION_TYPES.items()}
+    async def fetch_all(self, **kwargs) -> dict:
+        """Fetch all three consumption types in parallel."""
+        names = list(CONSUMPTION_TYPES.keys())
+        results = await asyncio.gather(
+            *(self.fetch_consumption(*args, **kwargs) for args in CONSUMPTION_TYPES.values())
+        )
+        return dict(zip(names, results))
 
-    def fetch_all_raw(self, **kwargs) -> dict:
+    async def fetch_all_raw(self, **kwargs) -> dict:
         """Fetch all three consumption types as raw API responses."""
-        return self.fetch_all(raw=True, **kwargs)
+        return await self.fetch_all(raw=True, **kwargs)
 

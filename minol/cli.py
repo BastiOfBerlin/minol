@@ -1,5 +1,6 @@
 """Command-line interface for the Minol scraper."""
 
+import asyncio
 import os
 import sys
 import stat
@@ -107,19 +108,7 @@ def main():
                           status_fn=lambda msg: print(msg, file=sys.stderr))
 
     try:
-        session_path = Path(args.session_path) if args.session_path else None
-        scraper.login(use_cache=not args.no_cache, session_path=session_path)
-
-        kwargs = {"raw": args.raw, "unit": args.unit}
-        if args.start:
-            kwargs["timeline_start"] = args.start
-        if args.end:
-            kwargs["timeline_end"] = args.end
-
-        if args.type == "all":
-            data = scraper.fetch_all(**kwargs)
-        else:
-            data = scraper.fetch_consumption(*CONSUMPTION_TYPES[args.type], **kwargs)
+        data = asyncio.run(_async_main(scraper, args))
 
         if args.output:
             fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
@@ -135,3 +124,20 @@ def main():
         log.debug("Details:", exc_info=True)
         log.error(f"Failed: {e}")
         sys.exit(1)
+
+
+async def _async_main(scraper, args) -> dict:
+    """Async entry point: login + fetch, returns data dict."""
+    session_path = Path(args.session_path) if args.session_path else None
+    await scraper.login(use_cache=not args.no_cache, session_path=session_path)
+
+    kwargs = {"raw": args.raw, "unit": args.unit}
+    if args.start:
+        kwargs["timeline_start"] = args.start
+    if args.end:
+        kwargs["timeline_end"] = args.end
+
+    if args.type == "all":
+        return await scraper.fetch_all(**kwargs)
+    else:
+        return await scraper.fetch_consumption(*CONSUMPTION_TYPES[args.type], **kwargs)

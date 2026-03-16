@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from io import StringIO
 from pathlib import Path
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import MagicMock, AsyncMock, patch, mock_open
 
 from minol.cli import load_config, resolve_credential, main
 
@@ -136,11 +136,12 @@ class TestMain(unittest.TestCase):
 
     def _mock_scraper_cls(self, fetch_result=None):
         scraper = MagicMock()
-        scraper.fetch_all.return_value = fetch_result or {"heating": {}, "warm_water": {}, "cold_water": {}}
-        scraper.fetch_heating.return_value = fetch_result or {"unit": "KWH", "rooms": {}}
-        scraper.fetch_warm_water.return_value = fetch_result or {"unit": "M3", "rooms": {}}
-        scraper.fetch_cold_water.return_value = fetch_result or {"unit": "M3", "rooms": {}}
-        scraper.fetch_consumption.return_value = fetch_result or {"unit": "", "rooms": {}}
+        scraper.login = AsyncMock(return_value=None)
+        scraper.fetch_all = AsyncMock(return_value=fetch_result or {"heating": {}, "warm_water": {}, "cold_water": {}})
+        scraper.fetch_heating = AsyncMock(return_value=fetch_result or {"unit": "KWH", "rooms": {}})
+        scraper.fetch_warm_water = AsyncMock(return_value=fetch_result or {"unit": "M3", "rooms": {}})
+        scraper.fetch_cold_water = AsyncMock(return_value=fetch_result or {"unit": "M3", "rooms": {}})
+        scraper.fetch_consumption = AsyncMock(return_value=fetch_result or {"unit": "", "rooms": {}})
         return scraper
 
     def test_basic_invocation_fetches_all_and_prints_json(self):
@@ -280,7 +281,8 @@ class TestMain(unittest.TestCase):
 
     def test_error_during_fetch_exits_with_1(self):
         scraper = MagicMock()
-        scraper.fetch_all.side_effect = RuntimeError("Network error")
+        scraper.login = AsyncMock(return_value=None)
+        scraper.fetch_all = AsyncMock(side_effect=RuntimeError("Network error"))
         with patch("minol.cli.MinolScraper", return_value=scraper):
             _, _, exit_code = self._run_main([
                 "--email", "u@x.com", "--password", "pass",
