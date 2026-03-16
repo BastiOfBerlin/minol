@@ -129,7 +129,6 @@ python -m unittest tests/test_utils.py -v
 - Add retry logic for transient failures.
 - Explore additional API endpoints (the portal likely has more data views).
 - Consider whether DEVELOPMENT.md should include B2C client IDs and internal identifiers (makes reconnaissance easier).
-- Add a CHANGELOG.md before the first PyPI release.
 - Document why the User-Agent string impersonates Chrome (SAP/B2C may reject non-browser UAs).
 - Add contribution guidelines (CONTRIBUTING.md) and/or code of conduct for open-source readiness.
 - Review logging level consistency across auth steps (some INFO content should be DEBUG).
@@ -137,4 +136,5 @@ python -m unittest tests/test_utils.py -v
 ## Further Reading
 
 - [README.md](README.md) — installation, credentials, usage, output format
+- [CHANGELOG.md](CHANGELOG.md) — version history and release notes
 - [DEVELOPMENT.md](DEVELOPMENT.md) — auth flow internals, data endpoint, session cache, debugging, security
