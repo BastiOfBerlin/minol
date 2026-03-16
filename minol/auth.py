@@ -284,8 +284,8 @@ def _step6_post_to_sap_acs(session: HttpSession, acs_url: str, form_data: dict):
         raise RuntimeError("Authentication failed: MYSAPSSO2 cookie not set")
 
 
-def _save_session(session: HttpSession, user_num: str, path: Path, status_fn=None):
-    """Serialize cookies and expiry info to a JSON cache file (mode 0o600)."""
+def _build_cache_data(session: HttpSession, user_num: str) -> dict:
+    """Build and return the session cache dict (same structure as the JSON cache file)."""
     cookies = [
         {"name": c.name, "value": c.value, "domain": c.domain,
          "path": c.path, "secure": c.secure, "expires": c.expires}
@@ -309,12 +309,17 @@ def _save_session(session: HttpSession, user_num: str, path: Path, status_fn=Non
     else:
         log.warning("  MYSAPSSO2 cookie not found -- cannot extract expiry.")
 
-    cache = {
+    return {
         "user_num": user_num,
         "expires_at": expires_at,
         "cookies": cookies,
         "saved_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _save_session(session: HttpSession, user_num: str, path: Path, status_fn=None):
+    """Serialize cookies and expiry info to a JSON cache file (mode 0o600)."""
+    cache = _build_cache_data(session, user_num)
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
@@ -326,27 +331,13 @@ def _save_session(session: HttpSession, user_num: str, path: Path, status_fn=Non
         log.warning("Could not save session cache to %s: %s", path, exc)
 
 
-def _restore_session(session: HttpSession, user_num: str, path: Path,
+def _load_cache_data(session: HttpSession, user_num: str, cache: dict,
                      status_fn=None) -> bool:
     """
-    Restore session cookies from cache if still valid.
+    Validate a cache dict and load its cookies into the session.
 
-    Returns True if the cache was loaded and the token has not expired,
-    False if the cache is missing, for a different user, expired, or unreadable.
-    When expires_at is absent or unparseable, the cache is rejected.
+    Returns True if the cache is valid and not expired, False otherwise.
     """
-    if not path.is_file():
-        if status_fn:
-            status_fn("No cached session found.")
-        return False
-
-    try:
-        with open(path) as f:
-            cache = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        log.warning(f"Could not read session cache: {e}")
-        return False
-
     if cache.get("user_num") != user_num:
         log.info("Session cache is for a different user number, ignoring.")
         return False
@@ -406,6 +397,41 @@ def _restore_session(session: HttpSession, user_num: str, path: Path,
     return True
 
 
+def _restore_session(session: HttpSession, user_num: str, path: Path,
+                     status_fn=None) -> bool:
+    """
+    Restore session cookies from a cache file if still valid.
+
+    Returns True if the cache was loaded and the token has not expired,
+    False if the cache is missing, for a different user, expired, or unreadable.
+    When expires_at is absent or unparseable, the cache is rejected.
+    """
+    if not path.is_file():
+        if status_fn:
+            status_fn("No cached session found.")
+        return False
+
+    try:
+        with open(path) as f:
+            cache = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        log.warning(f"Could not read session cache: {e}")
+        return False
+
+    return _load_cache_data(session, user_num, cache, status_fn)
+
+
+def _restore_session_data(session: HttpSession, user_num: str, cache: dict,
+                          status_fn=None) -> bool:
+    """
+    Restore session cookies from an in-memory cache dict if still valid.
+
+    Equivalent to _restore_session but accepts a dict instead of a file path,
+    avoiding all filesystem access.
+    """
+    return _load_cache_data(session, user_num, cache, status_fn)
+
+
 def authenticate(
     session: HttpSession,
     email: str,
@@ -414,13 +440,13 @@ def authenticate(
     status_fn=None,
     use_cache: bool = True,
     session_path: Path = None,
-) -> None:
+    session_data: dict = None,
+) -> "dict | None":
     """
     Authenticate to the Minol portal.
 
-    Tries to restore a cached session first (unless use_cache=False or
-    session_path=None-and-no-default). Falls back to the full 6-step SAML flow,
-    then persists the new session to cache.
+    Tries to restore a cached session first (unless use_cache=False).
+    Falls back to the full 6-step SAML flow, then persists the new session.
 
     Args:
         session: HTTP session to use for requests.
@@ -430,11 +456,26 @@ def authenticate(
         status_fn: Optional callback for progress messages (called with a string).
         use_cache: If False, always perform a fresh login (skip restore and save).
         session_path: Path to the session cache file. Defaults to DEFAULT_SESSION_PATH.
-    """
-    path = session_path or DEFAULT_SESSION_PATH
+            Ignored when session_data is provided.
+        session_data: In-memory session cache dict (same structure as the cache file).
+            When provided, all session cache I/O is in-memory — no files are read or
+            written. After a fresh login the new cache dict is returned so the caller
+            can persist it however they like.
 
-    if use_cache and _restore_session(session, user_num, path, status_fn):
-        return
+    Returns:
+        The session cache dict when session_data is provided (existing dict on cache
+        hit, new dict after a fresh login); None in all other cases (file mode).
+    """
+    in_memory_mode = session_data is not None
+
+    if use_cache:
+        if in_memory_mode:
+            if _restore_session_data(session, user_num, session_data, status_fn):
+                return session_data
+        else:
+            path = session_path or DEFAULT_SESSION_PATH
+            if _restore_session(session, user_num, path, status_fn):
+                return None
 
     if status_fn:
         status_fn("Authenticating...")
@@ -452,5 +493,11 @@ def authenticate(
     if status_fn:
         status_fn("Authentication successful.")
 
+    if in_memory_mode:
+        return _build_cache_data(session, user_num)
+
     if use_cache:
+        path = session_path or DEFAULT_SESSION_PATH
         _save_session(session, user_num, path, status_fn)
+
+    return None

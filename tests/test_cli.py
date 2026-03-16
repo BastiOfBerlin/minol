@@ -32,12 +32,12 @@ class TestLoadConfig(unittest.TestCase):
         result = load_config(Path("/nonexistent/config.json"))
         self.assertEqual(result, {})
 
-    def test_invalid_json_raises_system_exit(self):
+    def test_invalid_json_raises_value_error(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             f.write("{not valid json")
             tmp = Path(f.name)
         try:
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(ValueError):
                 load_config(tmp)
         finally:
             tmp.unlink(missing_ok=True)
@@ -86,8 +86,8 @@ class TestResolveCredential(unittest.TestCase):
                                     {"email": "config@x.com"})
         self.assertEqual(result, "config@x.com")
 
-    def test_system_exit_when_all_missing(self):
-        with self.assertRaises(SystemExit):
+    def test_value_error_when_all_missing(self):
+        with self.assertRaises(ValueError):
             resolve_credential("email", None, "TEST_CRED_VAR", {})
 
     def test_cli_arg_overrides_env(self):

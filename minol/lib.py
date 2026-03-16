@@ -1,7 +1,6 @@
 """MinolScraper class: data fetching and login orchestration."""
 
 import re
-import sys
 import json
 import logging
 from datetime import datetime, timedelta
@@ -30,10 +29,11 @@ class MinolScraper:
         self.user_num = user_num
         self.session = HttpSession()
         self.authenticated = False
-        self._status = status_fn or (lambda msg: print(msg, file=sys.stderr))
+        self._status = status_fn or (lambda msg: None)
 
     # ── Full login flow ────────────────────────────────────────────────────
-    def login(self, use_cache: bool = True, session_path: Path = None):
+    def login(self, use_cache: bool = True, session_path: Path = None,
+              session_data: dict = None) -> "dict | None":
         """
         Authenticate to the Minol portal.
 
@@ -41,14 +41,22 @@ class MinolScraper:
         transparently (restore on hit, save after fresh login).
         Pass use_cache=False to force a fresh SAML login.
         Pass session_path to override the default cache file location.
+        Pass session_data to use in-memory caching with no file I/O; after a
+        fresh login the new cache dict is returned so callers can store it
+        themselves (e.g. Home Assistant integrations).
+
+        Returns:
+            The session cache dict when session_data is provided (existing dict
+            on cache hit, new dict after a fresh login); None otherwise (file mode).
         """
-        auth.authenticate(
+        result = auth.authenticate(
             self.session, self.email, self.password, self.user_num,
             status_fn=self._status, use_cache=use_cache,
-            session_path=session_path,
+            session_path=session_path, session_data=session_data,
         )
         self.authenticated = True
         self.password = ""  # clear plaintext password from memory
+        return result
 
     # ── Data fetching ──────────────────────────────────────────────────────
     @staticmethod

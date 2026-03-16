@@ -179,6 +179,34 @@ from pathlib import Path
 scraper.login(session_path=Path("/tmp/my_session.json"))
 ```
 
+### In-memory session caching (no file I/O)
+
+API users (e.g. Home Assistant integrations) can manage the session cache themselves
+without touching the filesystem. Pass `session_data` to `login()`:
+
+```python
+from minol import MinolScraper
+
+scraper = MinolScraper("user@example.com", "password", "000000000000")
+
+# First call: pass an empty dict (or None-equivalent) to signal in-memory mode.
+# A fresh SAML login is performed and the new cache dict is returned.
+session_cache = scraper.login(session_data={})
+# Persist session_cache however you like (database, HA storage, etc.)
+
+# Subsequent calls: pass the stored cache dict back.
+# If the token is still valid it is restored without any network requests.
+# If it has expired a fresh login runs and a new cache dict is returned.
+session_cache = scraper.login(session_data=session_cache)
+
+data = scraper.fetch_all()
+```
+
+When `session_data` is provided:
+- No session cache file is read or written.
+- `login()` always returns the cache dict: the existing dict on a cache hit, or a new dict after a fresh login.
+
+
 ---
 
 ## Session Caching

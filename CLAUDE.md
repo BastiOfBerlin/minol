@@ -6,7 +6,7 @@ A Python scraper that authenticates to the Minol Kundenportal (SAP Enterprise Po
 
 ```
 minol/
-    __init__.py      # Public API: re-exports MinolScraper, load_config, etc.
+    __init__.py      # Public API: re-exports MinolScraper, CONSUMPTION_TYPES, __version__
     __main__.py      # `python -m minol` support → calls cli.main()
     _constants.py    # PORTAL_BASE, B2C_*, CONSUMPTION_TYPES, default paths
     _http.py         # HttpSession, HttpResponse, _NoRedirectHandler, resolve_url
@@ -132,7 +132,6 @@ python -m unittest tests/test_utils.py -v
 - Add a CHANGELOG.md before the first PyPI release.
 - Document why the User-Agent string impersonates Chrome (SAP/B2C may reject non-browser UAs).
 - Add contribution guidelines (CONTRIBUTING.md) and/or code of conduct for open-source readiness.
-- `lib.py` imports `sys` only for the default `status_fn` lambda — consider defaulting to `None` like `auth.py`.
 - Review logging level consistency across auth steps (some INFO content should be DEBUG).
 
 ## Further Reading

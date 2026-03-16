@@ -63,6 +63,126 @@ class TestMaskEmail(unittest.TestCase):
         self.assertEqual(auth._mask_email("a@b.com"), "a***@b.com")
 
 
+# ── _build_cache_data ──────────────────────────────────────────────────────────
+
+class TestBuildCacheData(unittest.TestCase):
+
+    def test_returns_dict_with_required_keys(self):
+        ticket = _build_ticket(valid_hours=8)
+        session = _session_with_sso2(ticket)
+        result = auth._build_cache_data(session, "000000000001")
+        self.assertIn("user_num", result)
+        self.assertIn("expires_at", result)
+        self.assertIn("cookies", result)
+        self.assertIn("saved_at", result)
+        self.assertEqual(result["user_num"], "000000000001")
+
+    def test_cookies_list_contains_mysapsso2(self):
+        ticket = _build_ticket(valid_hours=8)
+        session = _session_with_sso2(ticket)
+        result = auth._build_cache_data(session, "000000000001")
+        names = [c["name"] for c in result["cookies"]]
+        self.assertIn("MYSAPSSO2", names)
+
+    def test_expires_at_is_none_when_no_mysapsso2(self):
+        session = _session_with_sso2(None)
+        with self.assertLogs("minol.auth", level="WARNING"):
+            result = auth._build_cache_data(session, "000000000001")
+        self.assertIsNone(result["expires_at"])
+
+
+# ── _load_cache_data ───────────────────────────────────────────────────────────
+
+class TestLoadCacheData(unittest.TestCase):
+
+    def _valid_cache(self, user_num="000000000001", hours_ahead=12):
+        ticket = _build_ticket(valid_hours=24)
+        future = (datetime.now() + timedelta(hours=hours_ahead)).isoformat()
+        return {
+            "user_num": user_num,
+            "expires_at": future,
+            "cookies": [
+                {"name": "MYSAPSSO2", "value": ticket,
+                 "domain": "webservices.minol.com", "path": "/",
+                 "secure": False, "expires": None},
+            ],
+            "saved_at": datetime.now().isoformat(),
+        }
+
+    def test_valid_cache_loads_cookies_and_returns_true(self):
+        session = HttpSession()
+        result = auth._load_cache_data(session, "000000000001", self._valid_cache())
+        self.assertTrue(result)
+        self.assertIsNotNone(session.get_cookie("MYSAPSSO2"))
+
+    def test_wrong_user_num_returns_false(self):
+        session = HttpSession()
+        cache = self._valid_cache(user_num="OTHER_USER")
+        result = auth._load_cache_data(session, "000000000001", cache)
+        self.assertFalse(result)
+
+    def test_expired_returns_false(self):
+        session = HttpSession()
+        cache = self._valid_cache(hours_ahead=-1)
+        result = auth._load_cache_data(session, "000000000001", cache)
+        self.assertFalse(result)
+
+    def test_missing_expires_at_returns_false(self):
+        session = HttpSession()
+        cache = {"user_num": "000000000001", "cookies": []}
+        result = auth._load_cache_data(session, "000000000001", cache)
+        self.assertFalse(result)
+
+    def test_no_mysapsso2_in_cookies_returns_false(self):
+        session = HttpSession()
+        future = (datetime.now() + timedelta(hours=12)).isoformat()
+        cache = {
+            "user_num": "000000000001",
+            "expires_at": future,
+            "cookies": [
+                {"name": "other", "value": "val",
+                 "domain": "webservices.minol.com", "path": "/",
+                 "secure": False, "expires": None},
+            ],
+        }
+        result = auth._load_cache_data(session, "000000000001", cache)
+        self.assertFalse(result)
+
+    def test_status_fn_called_on_success(self):
+        session = HttpSession()
+        messages = []
+        auth._load_cache_data(session, "000000000001", self._valid_cache(),
+                              status_fn=messages.append)
+        self.assertTrue(any("cached" in m.lower() for m in messages))
+
+
+# ── _restore_session_data ──────────────────────────────────────────────────────
+
+class TestRestoreSessionData(unittest.TestCase):
+
+    def test_valid_dict_restores_session(self):
+        ticket = _build_ticket(valid_hours=24)
+        future = (datetime.now() + timedelta(hours=12)).isoformat()
+        session = HttpSession()
+        cache = {
+            "user_num": "000000000001",
+            "expires_at": future,
+            "cookies": [
+                {"name": "MYSAPSSO2", "value": ticket,
+                 "domain": "webservices.minol.com", "path": "/",
+                 "secure": False, "expires": None},
+            ],
+        }
+        result = auth._restore_session_data(session, "000000000001", cache)
+        self.assertTrue(result)
+        self.assertIsNotNone(session.get_cookie("MYSAPSSO2"))
+
+    def test_empty_dict_returns_false(self):
+        session = HttpSession()
+        result = auth._restore_session_data(session, "000000000001", {})
+        self.assertFalse(result)
+
+
 # ── _restore_session ───────────────────────────────────────────────────────────
 
 class TestRestoreSession(unittest.TestCase):
@@ -322,6 +442,71 @@ class TestAuthenticate(unittest.TestCase):
         self.assertTrue(len(messages) >= 2)
         self.assertTrue(any("authenticat" in m.lower() for m in messages))
         self.assertTrue(any("success" in m.lower() for m in messages))
+
+    def test_session_data_cache_hit_skips_saml_and_file(self):
+        """When session_data is provided and cache is valid, SAML steps and file I/O are skipped."""
+        session = HttpSession()
+        with patch("minol.auth._restore_session_data", return_value=True) as mock_restore:
+            with patch("minol.auth._step1_portal_entry") as mock_step1:
+                with patch("minol.auth._save_session") as mock_save:
+                    result = auth.authenticate(
+                        session, "u@x.com", "pass", "000000000001",
+                        session_data={"user_num": "000000000001"},
+                    )
+        mock_restore.assert_called_once()
+        mock_step1.assert_not_called()
+        mock_save.assert_not_called()
+        self.assertEqual(result, {"user_num": "000000000001"})
+
+    def test_session_data_cache_miss_returns_dict_no_file_write(self):
+        """When session_data is provided but expired, fresh login runs and cache dict is returned."""
+        session = HttpSession()
+        patches = self._patch_steps(session)
+        cache_dict = {"user_num": "000000000001", "expires_at": "2099-01-01T00:00:00+00:00", "cookies": []}
+        with patch("minol.auth._restore_session_data", return_value=False):
+            with patch("minol.auth._build_cache_data", return_value=cache_dict) as mock_build:
+                with patches[0] as s1, patches[1] as s2, patches[2] as s3, \
+                     patches[3] as s4, patches[4] as s5, patches[5] as s6, patches[6] as save:
+                    result = auth.authenticate(
+                        session, "u@x.com", "pass", "000000000001",
+                        session_data={},
+                    )
+        s1.assert_called_once()
+        s6.assert_called_once()
+        save.assert_not_called()
+        mock_build.assert_called_once()
+        self.assertEqual(result, cache_dict)
+
+    def test_session_data_use_cache_false_skips_restore_returns_dict(self):
+        """session_data + use_cache=False: skip restore, fresh login, return dict."""
+        session = HttpSession()
+        patches = self._patch_steps(session)
+        cache_dict = {"user_num": "000000000001", "cookies": []}
+        with patch("minol.auth._restore_session_data") as mock_restore:
+            with patch("minol.auth._build_cache_data", return_value=cache_dict):
+                with patches[0], patches[1], patches[2], patches[3], \
+                     patches[4], patches[5], patches[6] as save:
+                    result = auth.authenticate(
+                        session, "u@x.com", "pass", "000000000001",
+                        use_cache=False, session_data={},
+                    )
+        mock_restore.assert_not_called()
+        save.assert_not_called()
+        self.assertEqual(result, cache_dict)
+
+    def test_file_mode_fresh_login_returns_none(self):
+        """Without session_data (file mode), fresh login returns None."""
+        session = HttpSession()
+        patches = self._patch_steps(session)
+        with patch("minol.auth._restore_session", return_value=False):
+            with patches[0], patches[1], patches[2], patches[3], \
+                 patches[4], patches[5], patches[6]:
+                with tempfile.TemporaryDirectory() as d:
+                    result = auth.authenticate(
+                        session, "u@x.com", "pass", "000000000001",
+                        session_path=Path(d) / "s.json",
+                    )
+        self.assertIsNone(result)
 
 
 # ── Auth step unit tests ───────────────────────────────────────────────────────

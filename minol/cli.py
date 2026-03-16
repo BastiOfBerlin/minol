@@ -35,7 +35,7 @@ def load_config(path: Path = None) -> dict:
         with open(p) as f:
             return json.load(f)
     except json.JSONDecodeError as e:
-        raise SystemExit(f"Error: config file {p} contains invalid JSON: {e}") from None
+        raise ValueError(f"Error: config file {p} contains invalid JSON: {e}") from None
 
 
 def resolve_credential(name: str, cli_value: str | None, env_var: str, config: dict) -> str:
@@ -47,7 +47,7 @@ def resolve_credential(name: str, cli_value: str | None, env_var: str, config: d
     else:
         value = config.get(name)
     if not value:
-        raise SystemExit(
+        raise ValueError(
             f"Error: {name} not provided. Set it via --{name.replace('_', '-')}, "
             f"${env_var}, or {DEFAULT_CONFIG_PATH}"
         )
@@ -88,19 +88,23 @@ def main():
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-    config = load_config(Path(args.config) if args.config else None)
-    email = resolve_credential("email", args.email, "MINOL_EMAIL", config)
+    try:
+        config = load_config(Path(args.config) if args.config else None)
+        email = resolve_credential("email", args.email, "MINOL_EMAIL", config)
 
-    if args.password_stdin:
-        password = sys.stdin.readline().rstrip("\n")
-        if not password:
-            raise SystemExit("Error: --password-stdin provided but stdin was empty")
-    else:
-        password = resolve_credential("password", args.password, "MINOL_PASSWORD", config)
+        if args.password_stdin:
+            password = sys.stdin.readline().rstrip("\n")
+            if not password:
+                raise SystemExit("Error: --password-stdin provided but stdin was empty")
+        else:
+            password = resolve_credential("password", args.password, "MINOL_PASSWORD", config)
 
-    user_num = resolve_credential("user_num", args.user_num, "MINOL_USER_NUM", config)
+        user_num = resolve_credential("user_num", args.user_num, "MINOL_USER_NUM", config)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
 
-    scraper = MinolScraper(email, password, user_num)
+    scraper = MinolScraper(email, password, user_num,
+                          status_fn=lambda msg: print(msg, file=sys.stderr))
 
     try:
         session_path = Path(args.session_path) if args.session_path else None

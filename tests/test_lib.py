@@ -31,12 +31,12 @@ class TestMinolScraperInit(unittest.TestCase):
         s = MinolScraper("a@b.com", "secret", "000000000001")
         self.assertFalse(s.authenticated)
 
-    def test_default_status_fn_prints_to_stderr(self):
+    def test_default_status_fn_is_silent(self):
         s = MinolScraper("a@b.com", "secret", "000000000001")
         captured = StringIO()
         with patch("sys.stderr", captured):
             s._status("hello")
-        self.assertIn("hello", captured.getvalue())
+        self.assertEqual(captured.getvalue(), "")
 
     def test_custom_status_fn(self):
         messages = []
@@ -56,6 +56,7 @@ class TestMinolScraperLogin(unittest.TestCase):
         mock_auth.assert_called_once_with(
             s.session, "a@b.com", "secret", "000000000001",
             status_fn=s._status, use_cache=True, session_path=None,
+            session_data=None,
         )
         self.assertTrue(s.authenticated)
 
@@ -72,6 +73,29 @@ class TestMinolScraperLogin(unittest.TestCase):
             s.login(use_cache=False)
         _, kwargs = mock_auth.call_args
         self.assertFalse(kwargs["use_cache"])
+
+    def test_login_forwards_session_data(self):
+        s = MinolScraper("a@b.com", "secret", "000000000001")
+        cache = {"user_num": "000000000001", "cookies": []}
+        with patch("minol.auth.authenticate") as mock_auth:
+            s.login(session_data=cache)
+        _, kwargs = mock_auth.call_args
+        self.assertEqual(kwargs["session_data"], cache)
+
+    def test_login_returns_dict_from_authenticate(self):
+        """login() passes through the dict returned by authenticate() (in-memory mode)."""
+        s = MinolScraper("a@b.com", "secret", "000000000001")
+        new_cache = {"user_num": "000000000001", "expires_at": "2099-01-01T00:00:00+00:00", "cookies": []}
+        with patch("minol.auth.authenticate", return_value=new_cache):
+            result = s.login(session_data={})
+        self.assertEqual(result, new_cache)
+
+    def test_login_returns_none_in_file_mode(self):
+        """login() returns None when no session_data is provided (file mode)."""
+        s = MinolScraper("a@b.com", "secret", "000000000001")
+        with patch("minol.auth.authenticate", return_value=None):
+            result = s.login()
+        self.assertIsNone(result)
 
 
 # ── _parse_response() ──────────────────────────────────────────────────────────
