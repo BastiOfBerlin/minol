@@ -25,6 +25,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
+      - name: Install dependencies
+        run: pip install .
       - name: Run tests
         run: python -m unittest discover -s tests -v
 

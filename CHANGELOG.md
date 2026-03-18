@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI: install dependencies before running tests** — the `test` job now runs
+  `pip install .` so `aiohttp` (and its transitive dependencies) are available
+  when the test suite runs. Previously, tests failed with
+  `ModuleNotFoundError: No module named 'aiohttp'`.
+
 - **B2C SSO short-circuit** — if B2C already has an active SSO session it skips
   the login form and returns a SAML assertion directly in step 3. The scraper now
   detects a `SAMLResponse` form in the step-3 response and jumps straight to
