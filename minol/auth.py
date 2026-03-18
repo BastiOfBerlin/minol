@@ -6,16 +6,14 @@ SAP Enterprise Portal, and Azure AD B2C. Includes session caching
 so subsequent runs skip the full SAML flow when the token is still valid.
 """
 
-import asyncio
 import os
 import re
 import json
 import base64
 import logging
 from datetime import datetime, timedelta, timezone
-from http.cookiejar import Cookie
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 from minol._constants import PORTAL_BASE, B2C_DOMAIN, B2C_TENANT, DEFAULT_SESSION_PATH
 from minol._http import HttpSession, resolve_url
@@ -85,8 +83,11 @@ def _extract_state_properties(session: HttpSession, page_html: str) -> str:
     # Method 1: Look for it in the page HTML/JS
     tx_match = re.search(r'StateProperties=([A-Za-z0-9+/=_-]+)', page_html)
     if tx_match:
-        tx_value = f"StateProperties={tx_match.group(1)}"
-        log.info(f"  Transaction state (from page): {tx_value[:60]}...")
+        raw = tx_match.group(1)
+        # Re-add base64 padding if B2C omitted it (common in embedded HTML/JS).
+        padded = raw + "=" * (-len(raw) % 4)
+        tx_value = f"StateProperties={padded}"
+        log.info("  Transaction state extracted from page HTML")
         return tx_value
 
     # Method 2: Decode x-ms-cpim-trans cookie to get the transaction ID
@@ -98,34 +99,63 @@ def _extract_state_properties(session: HttpSession, page_html: str) -> str:
             state_json = json.dumps({"TID": tid})
             state_b64 = base64.b64encode(state_json.encode()).decode()
             tx_value = f"StateProperties={state_b64}"
-            log.info(f"  Transaction state (from cookie): {tx_value[:60]}...")
+            log.info("  Transaction state extracted from cookie")
             return tx_value
 
     raise RuntimeError("Could not extract transaction StateProperties")
 
 
-async def _step3_load_b2c_login(session: HttpSession, b2c_url: str) -> tuple[str, str, str]:
+async def _step3_load_b2c_login(session: HttpSession, b2c_url: str) -> tuple:
     """GET the B2C login page -> picks up CSRF token and session cookies.
 
-    Returns (csrf_token, tx_value, page_html).
+    Returns (csrf_token, tx_value, page_html, login_page_url).
+    csrf_token and tx_value are None when B2C returns a SAML SSO short-circuit.
     """
     log.info("Step 3: Loading B2C login page...")
-    resp = await session.get(b2c_url)
+    resp = await session.get_following_redirects(b2c_url, encoded=True)
     log.info(f"  Status: {resp.status_code}")
     log.info(f"  B2C cookies: {session.cookie_names(B2C_DOMAIN)}")
 
+    # Check whether B2C returned a SAML assertion directly (SSO short-circuit).
+    forms = parse_forms(resp.text)
+    if any("SAMLResponse" in f["fields"] for f in forms):
+        # B2C SSO short-circuit: attempt to force fresh credential entry with prompt=login.
+        log.info("  B2C SSO detected – retrying with &prompt=login to force login form...")
+        resp2 = await session.get_following_redirects(b2c_url + "&prompt=login", encoded=True)
+        session._extract_cookies_from_headers(resp2)
+
+        forms2 = parse_forms(resp2.text)
+        if not any("SAMLResponse" in f["fields"] for f in forms2):
+            # prompt=login produced the actual login form – continue with normal flow.
+            log.info("  Login form obtained after prompt=login")
+            resp = resp2
+        else:
+            # prompt=login still returned SSO assertion – fall through to step-6 short-circuit.
+            log.warning("  B2C still returning SSO assertion after prompt=login, falling back")
+            log.info("  B2C SSO session active – SAML assertion returned directly, skipping login steps")
+            return None, None, resp.text, resp.url
+
     csrf_token = session.get_cookie("x-ms-cpim-csrf")
     if not csrf_token:
-        raise RuntimeError("Could not find x-ms-cpim-csrf cookie")
+        log.debug("CSRF cookie not found via automatic processing, trying manual extraction...")
+        extracted = session._extract_cookies_from_headers(resp)
+        log.debug(f"  Manually extracted {extracted} cookies from response headers")
+        csrf_token = session.get_cookie("x-ms-cpim-csrf")
+        if not csrf_token:
+            raise RuntimeError("Could not find x-ms-cpim-csrf cookie")
     log.debug(f"  CSRF token length: {len(csrf_token)}")
 
     tx_value = _extract_state_properties(session, resp.text)
-    return csrf_token, tx_value, resp.text
+    # Strip query parameters: B2C expects the bare login page path as Referer, not the
+    # full SAML SSO URL with SAMLRequest/Signature query parameters.
+    login_page_url = resp.url.split("?")[0] if "?" in resp.url else resp.url
+    return csrf_token, tx_value, resp.text, login_page_url
 
 
 async def _step4_submit_credentials(session: HttpSession, b2c_policy: str,
                                     email: str, password: str,
-                                    csrf_token: str, tx_value: str, page_html: str):
+                                    csrf_token: str, tx_value: str, page_html: str,
+                                    login_page_url: str = None):
     """POST credentials to B2C's SelfAsserted endpoint."""
     log.info("Step 4: Submitting credentials to B2C SelfAsserted...")
 
@@ -160,21 +190,16 @@ async def _step4_submit_credentials(session: HttpSession, b2c_policy: str,
     })
     log.debug(f"  Credential check: email='{_mask_email(email)}', "
               f"password length={len(password) if password else 0}")
-    log.debug(f"  Encoded payload (password masked): {payload.split('&password=')[0]}&password=***")
 
     headers = {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "X-CSRF-TOKEN": csrf_token,
         "X-Requested-With": "XMLHttpRequest",
-        "Origin": f"https://{B2C_DOMAIN}",
-        "Referer": f"https://{B2C_DOMAIN}/{B2C_TENANT}/{b2c_policy}/samlp/sso/login",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
+        "Referer": login_page_url or f"https://{B2C_DOMAIN}/{B2C_TENANT}/{b2c_policy}/samlp/sso/login",
     }
 
-    resp = await session.post(self_asserted_url, data=payload, headers=headers)
+    resp = await session.post(self_asserted_url, data=payload, headers=headers, encoded=True)
     log.info(f"  Status: {resp.status_code}")
     log.debug(f"  Response: {resp.text[:300] if resp.text else '(empty)'}")
 
@@ -208,12 +233,12 @@ async def _step5_get_saml_response(session: HttpSession, b2c_policy: str,
         f"https://{B2C_DOMAIN}/{B2C_TENANT}/{b2c_policy}"
         f"/api/CombinedSigninAndSignup/confirmed"
         f"?rememberMe=false"
-        f"&csrf_token={csrf_token}"
-        f"&tx={tx_value}"
+        f"&csrf_token={quote(csrf_token, safe='')}"
+        f"&tx={quote(tx_value, safe='')}"
         f"&p={b2c_policy}"
     )
 
-    resp = await session.get(confirmed_url)
+    resp = await session.get(confirmed_url, encoded=True)
     log.info(f"  Status: {resp.status_code}")
 
     forms = parse_forms(resp.text)
@@ -263,17 +288,20 @@ async def _step6_post_to_sap_acs(session: HttpSession, acs_url: str, form_data: 
                 allow_redirects=False
             )
             log.info(f"  Portal login response status: {resp2.status_code}")
+            session._extract_cookies_from_headers(resp2)
 
             if resp2.status_code == 302:
                 location = resolve_url(resp2.headers.get("location", ""))
                 log.info(f"  Redirect to: {location}")
                 resp3 = await session.get(location)
                 log.info(f"  Final status: {resp3.status_code}")
+                session._extract_cookies_from_headers(resp3)
 
     elif resp.status_code == 302:
         location = resolve_url(resp.headers.get("location", ""))
         log.info(f"  Direct redirect to: {location}")
-        await session.get(location)
+        resp_r = await session.get(location)
+        session._extract_cookies_from_headers(resp_r)
 
     mysapsso2 = session.get_cookie("MYSAPSSO2")
 
@@ -287,16 +315,11 @@ async def _step6_post_to_sap_acs(session: HttpSession, acs_url: str, form_data: 
 
 def _build_cache_data(session: HttpSession, user_num: str) -> dict:
     """Build and return the session cache dict (same structure as the JSON cache file)."""
-    cookies = [
-        {"name": c.name, "value": c.value, "domain": c.domain,
-         "path": c.path, "secure": c.secure, "expires": c.expires}
-        for c in session.cookie_jar
-    ]
+    cookies = session.export_cookies()
 
     expires_at = None
     mysapsso2 = session.get_cookie("MYSAPSSO2")
     if mysapsso2:
-        log.info(f"  MYSAPSSO2 value length: {len(mysapsso2)}")
         ticket = parse_sap_ticket(mysapsso2)
         if ticket:
             expiry = ticket["created_at"].replace(tzinfo=timezone.utc) + timedelta(hours=ticket["valid_hours"])
@@ -365,32 +388,16 @@ def _load_cache_data(session: HttpSession, user_num: str, cache: dict,
     remaining = expiry - datetime.now(timezone.utc)
     log.info(f"Token expires at {expires_at} ({int(remaining.total_seconds()) // 60} min remaining).")
 
-    for c in cache.get("cookies", []):
-        cookie = Cookie(
-            version=0,
-            name=c["name"],
-            value=c["value"],
-            port=None,
-            port_specified=False,
-            domain=c["domain"],
-            domain_specified=bool(c["domain"]),
-            domain_initial_dot=c["domain"].startswith(".") if c["domain"] else False,
-            path=c["path"],
-            path_specified=bool(c["path"]),
-            secure=c["secure"],
-            expires=c["expires"],
-            discard=c["expires"] is None,
-            comment=None,
-            comment_url=None,
-            rest={},
-        )
-        session.cookie_jar.set_cookie(cookie)
+    cached_cookies = cache.get("cookies", [])
+    session.import_cookies(cached_cookies)
 
-    log.info(f"Restored {len(cache.get('cookies', []))} cookies from cache.")
+    log.info(f"Restored {len(cached_cookies)} cookies from cache.")
 
     if not session.get_cookie("MYSAPSSO2"):
         log.warning("MYSAPSSO2 not present in restored cookies, rejecting cache.")
-        session.cookie_jar.clear()
+        # Clear only the cookies we imported (domain-targeted; safe for injected sessions)
+        for domain in {c.get("domain", "").lstrip(".") for c in cached_cookies if c.get("domain")}:
+            session.clear_cookies(domain)
         return False
 
     if status_fn:
@@ -431,6 +438,34 @@ def _restore_session_data(session: HttpSession, user_num: str, cache: dict,
     avoiding all filesystem access.
     """
     return _load_cache_data(session, user_num, cache, status_fn)
+
+
+def _log_saml_response_status(saml_b64: str) -> None:
+    """Decode a base64 SAMLResponse and log its StatusCode(s), StatusMessage, and NameID."""
+    import base64
+    try:
+        saml_xml = base64.b64decode(saml_b64).decode("utf-8", errors="replace")
+        # Log all StatusCode values (top-level and nested sub-codes)
+        status_codes = re.findall(r'StatusCode[^>]+Value="([^"]+)"', saml_xml)
+        for code in status_codes:
+            log.info(f"  SAMLResponse StatusCode: {code.split(':')[-1]} ({code})")
+        # Log StatusMessage if present (often contains Azure B2C error code like AADB2C90219)
+        msg_match = re.search(r'<(?:\w+:)?StatusMessage[^>]*>([^<]+)</', saml_xml)
+        if msg_match:
+            log.info(f"  SAMLResponse StatusMessage: {msg_match.group(1)}")
+        nameid_match = re.search(r'<(?:\w+:)?NameID[^>]*>([^<]+)</', saml_xml)
+        if nameid_match:
+            log.info(f"  SAMLResponse NameID present (length {len(nameid_match.group(1))})")
+        else:
+            log.warning("  SAMLResponse contains no NameID – assertion may be an error response")
+        # Log the Status section specifically (not the full XML which is mostly Signature noise)
+        status_section = re.search(r'<(?:\w+:)?Status>.*?</(?:\w+:)?Status>', saml_xml, re.DOTALL)
+        if status_section:
+            log.debug(f"  SAMLResponse Status section: {status_section.group()}")
+        else:
+            log.debug(f"  SAMLResponse XML (last 600 chars): {saml_xml[-600:]}")
+    except Exception as exc:
+        log.debug(f"  Could not decode SAMLResponse: {exc}")
 
 
 async def authenticate(
@@ -484,11 +519,19 @@ async def authenticate(
 
     await _step1_portal_entry(session)
     b2c_url, b2c_policy = await _step2_trigger_saml(session)
-    csrf_token, tx_value, page_html = await _step3_load_b2c_login(session, b2c_url)
-    await _step4_submit_credentials(session, b2c_policy, email, password,
-                                    csrf_token, tx_value, page_html)
-    acs_url, form_data = await _step5_get_saml_response(session, b2c_policy,
-                                                        csrf_token, tx_value)
+    csrf_token, tx_value, page_html, login_page_url = await _step3_load_b2c_login(session, b2c_url)
+
+    if csrf_token is None:
+        # B2C short-circuit: SAML assertion already returned in step 3 – skip steps 4-5.
+        forms = parse_forms(page_html)
+        saml_form = next(f for f in forms if "SAMLResponse" in f["fields"])
+        _log_saml_response_status(saml_form["fields"]["SAMLResponse"])
+        acs_url, form_data = saml_form["action"], saml_form["fields"]
+    else:
+        await _step4_submit_credentials(session, b2c_policy, email, password,
+                                        csrf_token, tx_value, page_html, login_page_url)
+        acs_url, form_data = await _step5_get_saml_response(session, b2c_policy,
+                                                            csrf_token, tx_value)
     await _step6_post_to_sap_acs(session, acs_url, form_data)
 
     if status_fn:

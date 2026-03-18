@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-03-18
+
+### Added
+
+- **`aiohttp` dependency** — native async I/O replaces `asyncio.to_thread`-wrapped urllib.
+  aiohttp is the sole third-party dependency; the general
+  minimal-dependency principle still applies for everything else.
+- **Session injection** — `MinolScraper` and `HttpSession` now accept an optional
+  `session: aiohttp.ClientSession` parameter. When provided the library uses the
+  caller's managed session, and existing cookies in that session are never cleared.
+  When omitted, a private session is created and owned by the scraper (same behaviour as before).
+- **`MinolScraper.close()`** — async method that closes the underlying HTTP session.
+  No-op when an external session was injected.
+- **`async with MinolScraper(...)` support** — `__aenter__`/`__aexit__` call `close()`
+  automatically. The CLI uses `async with scraper:` internally.
+- **`HttpSession` cookie helpers** — `export_cookies()`, `import_cookies()`, and
+  `clear_cookies()` encapsulate all cookie-jar access. Existing helpers
+  (`get_cookie`, `cookie_names`, `all_cookies`) are unchanged in signature.
+
+### Changed
+
+- **`HttpSession` internals rewritten** — urllib, `http.cookiejar`, `_NoRedirectHandler`,
+  and `asyncio.to_thread` are gone. HTTP I/O is now fully native async via
+  `aiohttp.ClientSession`. `allow_redirects` is passed per-request natively.
+- **`auth.py` cookie access** — `_build_cache_data()` uses `session.export_cookies()`
+  and `_load_cache_data()` uses `session.import_cookies()` / `session.clear_cookies()`,
+  replacing direct `http.cookiejar.Cookie` construction and `CookieJar` manipulation.
+  Cache-rejection cleanup is now domain-targeted (safe for injected sessions).
+
+### Fixed
+
+- **B2C SSO short-circuit** — if B2C already has an active SSO session it skips
+  the login form and returns a SAML assertion directly in step 3. The scraper now
+  detects a `SAMLResponse` form in the step-3 response and jumps straight to
+  step 6 (ACS POST), bypassing credential submission (steps 4-5) that would
+  never succeed in this case.
+- **B2C cookie fallback** — `HttpSession._extract_cookies_from_headers()` manually
+  parses `Set-Cookie` headers and injects them into the cookie jar when aiohttp's
+  automatic processing silently drops them (observed with some B2C response
+  formats). The fallback is tried automatically in step 3 before raising.
+
 ## [1.2.0] — 2026-03-16
 
 ### Added
@@ -75,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `minol` console script entry point.
 - GitHub Actions CI/CD with PyPI trusted publishing via OIDC.
 
+[1.3.0]: https://codeberg.org/BastiOfBerlin/minol/compare/v1.2.0...v1.3.0
 [1.2.0]: https://codeberg.org/BastiOfBerlin/minol/compare/v1.1.1...v1.2.0
 [1.1.1]: https://codeberg.org/BastiOfBerlin/minol/compare/v1.1.0...v1.1.1
 [1.1.0]: https://codeberg.org/BastiOfBerlin/minol/compare/v1.0.1...v1.1.0

@@ -1,6 +1,6 @@
 # Minol Kundenportal Scraper
 
-A Python scraper that authenticates to the Minol Kundenportal (SAP Enterprise Portal + Azure AD B2C via SAML 2.0) and fetches per-room consumption data. **Zero third-party dependencies** — stdlib only.
+A Python scraper that authenticates to the Minol Kundenportal (SAP Enterprise Portal + Azure AD B2C via SAML 2.0) and fetches per-room consumption data. One third-party dependency: **aiohttp** (required for native async I/O and Home Assistant websession injection).
 
 ## Package Structure
 
@@ -9,7 +9,7 @@ minol/
     __init__.py      # Public API: re-exports MinolScraper, CONSUMPTION_TYPES, __version__
     __main__.py      # `python -m minol` support → calls cli.main()
     _constants.py    # PORTAL_BASE, B2C_*, CONSUMPTION_TYPES, default paths
-    _http.py         # HttpSession, HttpResponse, _NoRedirectHandler, resolve_url
+    _http.py         # HttpSession, HttpResponse, resolve_url (aiohttp-based)
     _utils.py        # parse_forms(), parse_sap_ticket()
     auth.py          # 6-step SAML login + session caching as standalone functions
     lib.py           # MinolScraper class (data fetching, login orchestration)
@@ -31,17 +31,20 @@ __init__.py    ← imports lib, cli, _constants
 
 ## Design Decisions & Constraints
 
-- **No third-party dependencies** — stdlib only (`urllib`, `http.cookiejar`, `json`, `re`, `html`, `base64`, `asyncio`).
+- **aiohttp as deliberate exception to minimal-dependency principle** — required for native async I/O (HA `async-dependency` quality scale item) and Home Assistant websession injection (`inject-websession`). All other dependencies remain stdlib-only.
 - **Async public API** — all I/O methods (`HttpSession.get/post`, `auth.authenticate`, all `MinolScraper` methods) are `async def`. Use `await` or `asyncio.run()`. `cli.main()` remains sync and calls `asyncio.run(_async_main(...))` internally, so CLI usage is unchanged.
-- **`asyncio.to_thread()` for urllib I/O** — `HttpSession._sync_request()` is the unchanged urllib implementation; `_request()` wraps it via `asyncio.to_thread()`. Requires Python 3.9+ (project requires 3.10+).
+- **Native async via aiohttp** — `HttpSession._request()` uses `aiohttp.ClientSession.request()` directly. No `asyncio.to_thread()`.
 - **`fetch_all()` parallelism** — uses `asyncio.gather()` to fetch all three consumption types concurrently.
+- **Session injection** — `HttpSession` and `MinolScraper` accept an optional `aiohttp.ClientSession`. When provided the caller's session is used (no ownership, `close()` is a no-op). When omitted, a private session is created lazily on the first request.
+- **Lazy aiohttp session creation** — `ClientSession` is created on first request to avoid requiring a running event loop at construction time. The `CookieJar` is created eagerly (using a temporary event loop) so cookie helpers work immediately.
+- **Cookie access encapsulated** — `export_cookies()` / `import_cookies()` / `clear_cookies()` on `HttpSession` replace direct `CookieJar` access. `clear_cookies(domain)` is domain-targeted, safe for injected sessions.
+- **`HttpResponse` stable interface** — aiohttp response details are wrapped in `HttpResponse` so no aiohttp types leak to callers.
 - **Auth as standalone functions** — `auth.py` has module-level `_stepN_` functions; `MinolScraper` delegates fully to `auth.authenticate()`.
 - **`status_fn` stays sync** — it's a simple `print()` callback; no benefit from async.
 - **File I/O in cache functions stays sync** — tiny JSON files, negligible latency; no benefit from async.
 - **Logging** — each module uses `logging.getLogger(__name__)`; `logging.basicConfig()` is only called in `cli.main()`, not at import time.
 - **Dynamic B2C policy detection** — policy name extracted from the SAP redirect URL, not hardcoded.
 - **Regex form parsing** — SAML auto-submit pages are machine-generated; regex is reliable. `parse_forms()` handles both attribute orderings (`name=... value=...` and `value=... name=...`).
-- **Header case sensitivity** — `dict(resp.headers)` loses `HTTPMessage` case-insensitivity; use `.get()` with both casings where needed.
 - **Relative URL resolution** — SAP may return relative paths in form actions and `Location` headers; resolve against `PORTAL_BASE` before use.
 - **Clean Architecture/Clean Code** — Follow design principles to keep a maintainable code base.
 

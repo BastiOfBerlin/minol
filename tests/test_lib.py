@@ -44,6 +44,47 @@ class TestMinolScraperInit(unittest.TestCase):
         s._status("test message")
         self.assertEqual(messages, ["test message"])
 
+    def test_session_injection_uses_injected_session(self):
+        import aiohttp
+        from minol._http import HttpSession
+        external = MagicMock(spec=aiohttp.ClientSession)
+        external.cookie_jar = HttpSession()._jar
+        s = MinolScraper("a@b.com", "secret", "000000000001", session=external)
+        self.assertIs(s.session._aio_session, external)
+        self.assertFalse(s.session._owns_session)
+
+    def test_no_session_owns_session(self):
+        s = MinolScraper("a@b.com", "secret", "000000000001")
+        self.assertTrue(s.session._owns_session)
+
+
+# ── close() / async context manager ───────────────────────────────────────────
+
+class TestMinolScraperLifecycle(unittest.IsolatedAsyncioTestCase):
+
+    async def test_close_delegates_to_http_session(self):
+        s = MinolScraper("a@b.com", "secret", "000000000001")
+        with patch.object(s.session, "close", new_callable=AsyncMock) as mock_close:
+            await s.close()
+        mock_close.assert_called_once()
+
+    async def test_async_context_manager_calls_close(self):
+        s = MinolScraper("a@b.com", "secret", "000000000001")
+        with patch.object(s.session, "close", new_callable=AsyncMock) as mock_close:
+            async with s:
+                pass
+        mock_close.assert_called_once()
+
+    async def test_async_context_manager_calls_close_on_exception(self):
+        s = MinolScraper("a@b.com", "secret", "000000000001")
+        with patch.object(s.session, "close", new_callable=AsyncMock) as mock_close:
+            try:
+                async with s:
+                    raise ValueError("test error")
+            except ValueError:
+                pass
+        mock_close.assert_called_once()
+
 
 # ── login() ────────────────────────────────────────────────────────────────────
 

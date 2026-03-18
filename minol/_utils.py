@@ -111,7 +111,8 @@ def parse_sap_ticket(mysapsso2: str) -> dict | None:
         try:
             val_repr = value.decode("ascii")
         except (ValueError, UnicodeDecodeError):
-            val_repr = f"(hex) {value.hex()}"
+            hex_str = value.hex()
+            val_repr = f"(hex) {hex_str[:40]}{'...' if len(hex_str) > 40 else ''}"
         log.debug(f"  SAP ticket: unit 0x{unit_id:02x} len={length} val={val_repr!r}")
 
         if unit_id == 0x04:

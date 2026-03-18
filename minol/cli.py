@@ -14,6 +14,8 @@ from minol._constants import CONSUMPTION_TYPES, DEFAULT_CONFIG_PATH
 
 __all__ = ["load_config", "resolve_credential", "main"]
 
+log = logging.getLogger(__name__)
+
 
 def load_config(path: Path = None) -> dict:
     """Load credentials from a JSON config file.
@@ -120,7 +122,6 @@ def main():
             print(json.dumps(data, indent=2))
 
     except Exception as e:
-        log = logging.getLogger(__name__)
         log.debug("Details:", exc_info=True)
         log.error(f"Failed: {e}")
         sys.exit(1)
@@ -128,16 +129,17 @@ def main():
 
 async def _async_main(scraper, args) -> dict:
     """Async entry point: login + fetch, returns data dict."""
-    session_path = Path(args.session_path) if args.session_path else None
-    await scraper.login(use_cache=not args.no_cache, session_path=session_path)
+    async with scraper:
+        session_path = Path(args.session_path) if args.session_path else None
+        await scraper.login(use_cache=not args.no_cache, session_path=session_path)
 
-    kwargs = {"raw": args.raw, "unit": args.unit}
-    if args.start:
-        kwargs["timeline_start"] = args.start
-    if args.end:
-        kwargs["timeline_end"] = args.end
+        kwargs = {"raw": args.raw, "unit": args.unit}
+        if args.start:
+            kwargs["timeline_start"] = args.start
+        if args.end:
+            kwargs["timeline_end"] = args.end
 
-    if args.type == "all":
-        return await scraper.fetch_all(**kwargs)
-    else:
-        return await scraper.fetch_consumption(*CONSUMPTION_TYPES[args.type], **kwargs)
+        if args.type == "all":
+            return await scraper.fetch_all(**kwargs)
+        else:
+            return await scraper.fetch_consumption(*CONSUMPTION_TYPES[args.type], **kwargs)

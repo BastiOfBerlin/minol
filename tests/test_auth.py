@@ -32,19 +32,16 @@ def _build_ticket(timestamp="202503141200", valid_hours=8):
 
 def _session_with_sso2(ticket_value=None):
     """Return an HttpSession that has a MYSAPSSO2 cookie."""
-    from http.cookiejar import Cookie
     session = HttpSession()
     if ticket_value is not None:
-        cookie = Cookie(
-            version=0, name="MYSAPSSO2", value=ticket_value,
-            port=None, port_specified=False,
-            domain="webservices.minol.com", domain_specified=True,
-            domain_initial_dot=False,
-            path="/", path_specified=True,
-            secure=False, expires=None, discard=True,
-            comment=None, comment_url=None, rest={},
-        )
-        session.cookie_jar.set_cookie(cookie)
+        session.import_cookies([{
+            "name": "MYSAPSSO2",
+            "value": ticket_value,
+            "domain": "webservices.minol.com",
+            "path": "/",
+            "secure": False,
+            "expires": None,
+        }])
     return session
 
 
@@ -382,7 +379,7 @@ class TestAuthenticate(unittest.IsolatedAsyncioTestCase):
         """Patch all 6 SAML steps and _save_session so authenticate() won't do real I/O."""
         step1 = patch("minol.auth._step1_portal_entry", return_value=_make_resp())
         step2 = patch("minol.auth._step2_trigger_saml", return_value=("https://b2c.example.com/", "B2C_1A_POLICY"))
-        step3 = patch("minol.auth._step3_load_b2c_login", return_value=("csrf_tok", "StateProperties=x", "<html/>"))
+        step3 = patch("minol.auth._step3_load_b2c_login", return_value=("csrf_tok", "StateProperties=x", "<html/>", "https://b2c.example.com/login"))
         step4 = patch("minol.auth._step4_submit_credentials", return_value=_make_resp())
         step5 = patch("minol.auth._step5_get_saml_response", return_value=("https://sap.example.com/acs", {"SAMLResponse": "data"}))
         step6 = patch("minol.auth._step6_post_to_sap_acs", return_value=None)
@@ -494,6 +491,34 @@ class TestAuthenticate(unittest.IsolatedAsyncioTestCase):
         save.assert_not_called()
         self.assertEqual(result, cache_dict)
 
+    async def test_b2c_sso_shortcircuit_skips_steps_4_and_5(self):
+        """When step 3 returns (None, None, html), steps 4-5 are skipped and step 6 uses the SAML form."""
+        session = HttpSession()
+        saml_html = (
+            "<html><body>"
+            "<form method='post' action='https://webservices.minol.com/saml2/sp/acs'>"
+            "<input type='hidden' name='SAMLResponse' value='PHNhbWwv'/>"
+            "</form></body></html>"
+        )
+        step3 = patch("minol.auth._step3_load_b2c_login", return_value=(None, None, saml_html, "https://b2c.example.com/"))
+        step4 = patch("minol.auth._step4_submit_credentials")
+        step5 = patch("minol.auth._step5_get_saml_response")
+        step6 = patch("minol.auth._step6_post_to_sap_acs")
+        with patch("minol.auth._step1_portal_entry"), \
+             patch("minol.auth._step2_trigger_saml", return_value=("https://b2c.example.com/", "B2C_1A_POLICY")), \
+             patch("minol.auth._restore_session", return_value=False), \
+             patch("minol.auth._save_session"), \
+             step3, step4 as mock4, step5 as mock5, step6 as mock6:
+            with tempfile.TemporaryDirectory() as d:
+                await auth.authenticate(session, "u@x.com", "pass", "000000000001",
+                                        session_path=Path(d) / "s.json")
+        mock4.assert_not_called()
+        mock5.assert_not_called()
+        mock6.assert_called_once()
+        acs_url, form_data = mock6.call_args[0][1], mock6.call_args[0][2]
+        self.assertEqual(acs_url, "https://webservices.minol.com/saml2/sp/acs")
+        self.assertEqual(form_data["SAMLResponse"], "PHNhbWwv")
+
     async def test_file_mode_fresh_login_returns_none(self):
         """Without session_data (file mode), fresh login returns None."""
         session = HttpSession()
@@ -551,19 +576,36 @@ class TestStep3LoadB2cLogin(unittest.IsolatedAsyncioTestCase):
     async def test_extracts_csrf_and_state(self):
         session = MagicMock()
         page_html = '<html><script>var x = "StateProperties=ABCDEF123";</script></html>'
-        session.get = AsyncMock(return_value=_make_resp(200, text=page_html))
+        session.get_following_redirects = AsyncMock(return_value=_make_resp(200, text=page_html))
         session.get_cookie.return_value = "csrf_token_value"
-        csrf, tx, html = await auth._step3_load_b2c_login(session, "https://b2c.example.com/")
+        csrf, tx, html, page_url = await auth._step3_load_b2c_login(session, "https://b2c.example.com/")
         self.assertEqual(csrf, "csrf_token_value")
         self.assertIn("StateProperties=", tx)
         self.assertEqual(html, page_html)
 
     async def test_raises_if_no_csrf_cookie(self):
         session = MagicMock()
-        session.get = AsyncMock(return_value=_make_resp(200, text="<html/>"))
+        session.get_following_redirects = AsyncMock(return_value=_make_resp(200, text="<html/>"))
         session.get_cookie.return_value = None
         with self.assertRaises(RuntimeError):
             await auth._step3_load_b2c_login(session, "https://b2c.example.com/")
+
+    async def test_saml_shortcircuit_returns_none_csrf(self):
+        """When B2C returns a SAML auto-submit form directly, csrf and tx are None."""
+        session = MagicMock()
+        page_html = (
+            "<html><body>"
+            "<form method='post' action='https://webservices.minol.com/saml2/sp/acs'>"
+            "<input type='hidden' name='SAMLResponse' value='PHNhbWwv'/>"
+            "</form></body></html>"
+        )
+        session.get_following_redirects = AsyncMock(return_value=_make_resp(200, text=page_html))
+        # SSO detected → retries with prompt=login (also returns SSO page)
+        csrf, tx, html, page_url = await auth._step3_load_b2c_login(session, "https://b2c.example.com/")
+        self.assertIsNone(csrf)
+        self.assertIsNone(tx)
+        self.assertEqual(html, page_html)
+        session.get_cookie.assert_not_called()
 
 
 class TestStep4SubmitCredentials(unittest.IsolatedAsyncioTestCase):

@@ -1,6 +1,6 @@
 # Minol Kundenportal Scraper
 
-A Python scraper that authenticates to the Minol Kundenportal and fetches consumption data (heating, warm water, cold water) on a per-room basis. Pure Python — stdlib only, no third-party dependencies.
+A Python scraper that authenticates to the Minol Kundenportal and fetches consumption data (heating, warm water, cold water) on a per-room basis. One dependency: [aiohttp](https://docs.aiohttp.org/) for native async I/O.
 
 For authentication internals, data endpoint reference, and debugging, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
@@ -219,6 +219,26 @@ When `session_data` is provided:
 - No session cache file is read or written.
 - `login()` always returns the cache dict: the existing dict on a cache hit, or a new dict after a fresh login.
 
+### Injecting an external aiohttp session
+
+Integrations that manage their own `aiohttp.ClientSession` (e.g. Home Assistant) can
+pass it in directly. The library uses it for all requests and never closes it:
+
+```python
+import aiohttp
+from minol import MinolScraper
+
+async def main(client_session: aiohttp.ClientSession):
+    async with MinolScraper(
+        "user@example.com", "password", "000000000000",
+        session=client_session,
+    ) as scraper:
+        await scraper.login(session_data=session_cache)
+        data = await scraper.fetch_all()
+```
+
+- `close()` is a no-op when a session is injected (the caller owns the session).
+- Only Minol-related cookies are added to or removed from the injected session's jar.
 
 ---
 

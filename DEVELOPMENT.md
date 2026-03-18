@@ -20,11 +20,28 @@ All steps live in `minol/auth.py` as module-level functions.
 
 ### Step 2 — Trigger SAML Redirect (`_step2_trigger_saml`)
 
-`GET /minol.com~kundenportal~login~saml/?logonTargetUrl=...&saml2idp=B2C-Minol` — SAP returns 302 to B2C with a `SAMLRequest`. The B2C policy name is extracted dynamically from the redirect URL (SAP alternates between `B2C_1A_Signup_Signin_Groups_SAML` and `B2C_1A_Signup_Signin_Groups_SAML-4`).
+`GET /minol.com~kundenportal~login~saml/?logonTargetUrl=...&saml2idp=B2C-Minol` — SAP returns 302 to B2C with a `SAMLRequest`. The B2C policy name is extracted dynamically from the redirect URL (SAP alternates between `B2C_1A_Signup_Signin_Groups_SAML` and `B2C_1A_Signup_Signin_Groups_SAML-4`). The redirect is followed by `HttpSession.get(..., allow_redirects=False)` which passes `allow_redirects=False` to aiohttp natively.
 
 ### Step 3 — Load B2C Login Page (`_step3_load_b2c_login`)
 
-`GET` the B2C login page — picks up `x-ms-cpim-csrf`, `x-ms-cpim-cache`, and `x-ms-cpim-trans` cookies. The `StateProperties` transaction token is extracted from the page HTML (regex) or constructed from the `x-ms-cpim-trans` cookie (fallback).
+`GET` the B2C login page. Two outcomes are possible:
+
+**Normal path** — B2C returns the login form. Picks up `x-ms-cpim-csrf`,
+`x-ms-cpim-cache`, and `x-ms-cpim-trans` cookies. The `StateProperties`
+transaction token is extracted from the page HTML (regex) or constructed from
+the `x-ms-cpim-trans` cookie (fallback). Returns `(csrf_token, tx_value, page_html)`.
+
+**SSO short-circuit** — if B2C already has an active SSO session it skips the
+login form and returns an HTML page with a `SAMLResponse` auto-submit form
+targeting `https://webservices.minol.com/saml2/sp/acs`. This is detected by
+scanning the response with `parse_forms()`. When found, the function returns
+`(None, None, page_html)` and `authenticate()` jumps directly to step 6,
+bypassing steps 4-5.
+
+**Cookie fallback** — if `x-ms-cpim-csrf` is absent from the jar after the GET,
+`_extract_cookies_from_headers()` manually parses the raw `Set-Cookie` response
+headers via `http.cookies.SimpleCookie` and injects them into the jar. This
+handles cases where aiohttp silently drops cookies due to unusual formatting.
 
 ### Step 4 — Submit Credentials (`_step4_submit_credentials`)
 
@@ -148,6 +165,8 @@ Run with `-v` for verbose logging showing every step, cookie, redirect, and resp
 
 - **Shell escaping** — Passwords with `$`, `!`, backticks, or backslashes are mangled by bash in double quotes. Use single quotes for `--password`/`--email`, or use `--password-stdin`.
 - **Step 2 — SAML redirect** — `Location` header from SAP may use non-standard casing; the code uses case-insensitive access.
+- **Step 3 — SSO short-circuit** — if B2C has an active SSO session it skips the login form and returns a SAML auto-submit page directly. The scraper detects the `SAMLResponse` form and jumps to step 6. `-v` output will show `B2C SSO session active – SAML assertion returned directly`.
+- **Step 3 — missing CSRF cookie** — aiohttp may silently drop B2C cookies for unusual `Set-Cookie` formats. A manual-extraction fallback kicks in automatically. If the fallback also fails, check the raw `Set-Cookie` headers using a browser HAR capture (see below).
 - **Step 3 — StateProperties** — B2C may change how the transaction token is embedded. Two fallback methods are tried: regex on page HTML, then construction from `x-ms-cpim-trans` cookie.
 - **Step 4 — SelfAsserted POST** — CSRF token, Origin, and Referer must match exactly. B2C returns a generic error for many failure modes.
 - **Step 5 — SAMLResponse form** — If B2C changes the confirmation page HTML structure, `parse_forms()` may fail. Check raw HTML in debug output.

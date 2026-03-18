@@ -142,6 +142,8 @@ class TestMain(unittest.TestCase):
         scraper.fetch_warm_water = AsyncMock(return_value=fetch_result or {"unit": "M3", "rooms": {}})
         scraper.fetch_cold_water = AsyncMock(return_value=fetch_result or {"unit": "M3", "rooms": {}})
         scraper.fetch_consumption = AsyncMock(return_value=fetch_result or {"unit": "", "rooms": {}})
+        scraper.__aenter__ = AsyncMock(return_value=scraper)
+        scraper.__aexit__ = AsyncMock(return_value=False)
         return scraper
 
     def test_basic_invocation_fetches_all_and_prints_json(self):

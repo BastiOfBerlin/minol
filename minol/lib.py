@@ -6,10 +6,14 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from minol._constants import PORTAL_BASE, DATA_ENDPOINT, CONSUMPTION_TYPES
 from minol._http import HttpSession
 from minol import auth
+
+if TYPE_CHECKING:
+    import aiohttp
 
 __all__ = ["MinolScraper"]
 
@@ -24,13 +28,25 @@ class MinolScraper:
         "Referer": f"{PORTAL_BASE}/irj/portal",
     }
 
-    def __init__(self, email: str, password: str, user_num: str, status_fn=None):
+    def __init__(self, email: str, password: str, user_num: str, status_fn=None,
+                 session: "aiohttp.ClientSession | None" = None):
         self.email = email
         self.password = password
         self.user_num = user_num
-        self.session = HttpSession()
+        self.session = HttpSession(session=session)
         self.authenticated = False
         self._status = status_fn or (lambda msg: None)
+
+    # ── Lifecycle ──────────────────────────────────────────────────────────
+    async def close(self) -> None:
+        """Close the underlying HTTP session (no-op for injected sessions)."""
+        await self.session.close()
+
+    async def __aenter__(self) -> "MinolScraper":
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.close()
 
     # ── Full login flow ────────────────────────────────────────────────────
     async def login(self, use_cache: bool = True, session_path: Path = None,

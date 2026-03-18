@@ -1,8 +1,9 @@
 [project]
 name = "minol"
-version = "1.2.0"
+version = "1.3.0"
 description = "Scraper for the Minol Kundenportal (utility metering data)"
 requires-python = ">=3.10"
+dependencies = ["aiohttp"]
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "BastiOfBerlin" }]
